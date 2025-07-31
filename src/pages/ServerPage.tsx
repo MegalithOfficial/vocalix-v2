@@ -1,186 +1,28 @@
 import { motion } from 'framer-motion';
-import { useState, useEffect } from 'react';
-import { ArrowLeft, Play, Square, Users, Shield, Network, Copy, Check, ExternalLink } from 'lucide-react';
-import { Link } from 'react-router-dom';
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
+import { useState } from 'react';
+import { ArrowLeft, Play, Square, Users, Shield, Network, Copy, Check } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import TwitchIntegration from '../components/TwitchIntegration';
 
 const ServerPage = () => {
+  const navigate = useNavigate();
   const [isServerRunning, setIsServerRunning] = useState(false);
   const [serverIP, setServerIP] = useState('192.168.1.100');
   const [serverPort, setServerPort] = useState('8080');
   const [connectedClients, setConnectedClients] = useState(0);
   const [copied, setCopied] = useState(false);
-  
-  // Twitch integration state
-  const [isTwitchConnected, setIsTwitchConnected] = useState(false);
-  const [twitchUser, setTwitchUser] = useState<any>(null);
-  const [twitchStatus, setTwitchStatus] = useState('');
-  const [isEventSubRunning, setIsEventSubRunning] = useState(false);
-  const [isStartingEventSub, setIsStartingEventSub] = useState(false);
 
-  // Check Twitch authentication status on component mount
-  useEffect(() => {
-    checkTwitchAuth();
-    
-    // Listen for Twitch events
-    const unlistenAuth = listen('TWITCH_AUTH_SUCCESS', (event) => {
-      console.log('Twitch auth success:', event.payload);
-      setTwitchUser(event.payload as any);
-      setIsTwitchConnected(true);
-      setTwitchStatus('Connected to Twitch');
-    });
-
-    const unlistenSignOut = listen('TWITCH_SIGNED_OUT', () => {
-      setIsTwitchConnected(false);
-      setTwitchUser(null);
-      setTwitchStatus('Signed out from Twitch');
-      setIsEventSubRunning(false);
-    });
-
-    const unlistenStatus = listen('STATUS_UPDATE', (event) => {
-      setTwitchStatus(event.payload as string);
-    });
-
-    const unlistenError = listen('ERROR', (event) => {
-      setTwitchStatus(`Error: ${event.payload}`);
-      setIsStartingEventSub(false);
-    });
-
-    return () => {
-      unlistenAuth.then(f => f());
-      unlistenSignOut.then(f => f());
-      unlistenStatus.then(f => f());
-      unlistenError.then(f => f());
-    };
-  }, []);
-
-  const checkTwitchAuth = async () => {
-    try {
-      const isAuthenticated = await invoke('twitch_is_authenticated') as boolean;
-      setIsTwitchConnected(isAuthenticated);
-      
-      if (isAuthenticated) {
-        try {
-          const userInfo = await invoke('twitch_get_user_info') as any;
-          setTwitchUser(userInfo);
-          setTwitchStatus('Connected to Twitch');
-        } catch (error) {
-          console.error('Failed to get user info:', error);
-          setTwitchStatus('Connected but failed to get user info');
-        }
-      }
-    } catch (error) {
-      console.error('Failed to check Twitch auth:', error);
-      setIsTwitchConnected(false);
-    }
+  // Handler for when the TwitchIntegration component triggers host as server
+  const handleTwitchHostServer = () => {
+    navigate('/connecting-eventsub');
   };
 
-  // Core function: Check if tokens are valid
-  const checkTokensValid = async (): Promise<boolean> => {
-    try {
-      const isValid = await invoke('twitch_is_authenticated') as boolean;
-      return isValid;
-    } catch (error) {
-      console.error('Failed to check token validity:', error);
-      return false;
-    }
-  };
-
-  // Core function: Start EventSub
-  const startEventSub = async () => {
-    setIsStartingEventSub(true);
-    setTwitchStatus('Starting EventSub...');
-    
-    try {
-      await invoke('twitch_start_event_listener');
-      setIsEventSubRunning(true);
-      setTwitchStatus('EventSub is running');
-    } catch (error) {
-      setTwitchStatus(`Failed to start EventSub: ${error}`);
-      console.error('Failed to start EventSub:', error);
-    } finally {
-      setIsStartingEventSub(false);
-    }
-  };
-
-  // Core function: Start authentication process using Device Code Grant Flow
-  const startAuthentication = async () => {
-    setTwitchStatus('Starting Twitch authentication...');
-    
-    // For simplicity, redirect to settings page for authentication
-    // In a real app, you might want to embed the auth component here
-    setTwitchStatus('Please go to Settings page to authenticate with Twitch using Device Code Grant Flow');
-  };
-
-  // Main function called when hosting server - implements the requested flow
-  const handleHostServer = async () => {
-    setTwitchStatus('Checking token validity...');
-    
-    const tokensValid = await checkTokensValid();
-    
-    if (tokensValid) {
-      setTwitchStatus('Tokens are valid, starting EventSub...');
-      await startEventSub();
-    } else {
-      setTwitchStatus('Tokens invalid or missing, starting authentication...');
-      await startAuthentication();
-    }
-  };
-
-  const disconnectFromTwitch = async () => {
-    try {
-      // Stop EventSub if running
-      if (isEventSubRunning) {
-        setIsEventSubRunning(false);
-      }
-      
-      await invoke('twitch_sign_out');
-      setIsTwitchConnected(false);
-      setTwitchUser(null);
-      setTwitchStatus('Disconnected from Twitch');
-    } catch (error) {
-      console.error('Failed to disconnect from Twitch:', error);
-    }
-  };
-
-  const simulateRedemption = async () => {
-    // Since we're using the new system, create a mock redemption event
-    const mockRedemption = {
-      id: `test_${Date.now()}`,
-      user_name: 'TestUser',
-      user_input: 'This is a test redemption!',
-      reward_title: 'Test Reward',
-      reward_cost: 100,
-      reward_prompt: 'A test reward for demonstration',
-      redeemed_at: new Date().toISOString()
-    };
-    
-    // Emit the event as if it came from Twitch
-    window.dispatchEvent(new CustomEvent('TWITCH_CHANNEL_POINTS_REDEMPTION', {
-      detail: mockRedemption
-    }));
-    
-    setTwitchStatus('Test redemption simulated!');
-  };
-
-  const handleStartServer = async () => {
-    if (!isServerRunning) {
-      // Starting server - first handle Twitch EventSub
-      await handleHostServer();
-      
-      // Then start the actual server
-      setIsServerRunning(true);
+  const handleStartServer = () => {
+    if (isServerRunning) {
+      setIsServerRunning(false);
       setConnectedClients(0);
     } else {
-      // Stopping server
-      setIsServerRunning(false);
-      
-      // Stop EventSub if running
-      if (isEventSubRunning) {
-        setIsEventSubRunning(false);
-        setTwitchStatus('EventSub stopped');
-      }
+      setIsServerRunning(true);
     }
   };
 
@@ -393,127 +235,14 @@ const ServerPage = () => {
             transition={{ duration: 0.5, delay: 0.4 }}
             className="mt-8 bg-gray-800/50 border border-gray-700/50 rounded-2xl p-8"
           >
-            <div className="flex items-center justify-between mb-6">
-              <div>
-                <h3 className="text-xl font-bold text-white mb-2">Twitch Integration</h3>
-                <p className="text-gray-400">EventSub will automatically start when hosting the server</p>
-              </div>
-              
-              <div className="flex items-center space-x-4">
-                {/* Twitch Connection Status */}
-                <div className={`flex items-center px-4 py-2 rounded-lg ${
-                  isTwitchConnected ? 'bg-green-500/20 text-green-400' : 'bg-gray-600/20 text-gray-400'
-                }`}>
-                  <div className={`w-2 h-2 rounded-full mr-2 ${
-                    isTwitchConnected ? 'bg-green-400' : 'bg-gray-500'
-                  }`}></div>
-                  <span className="text-sm font-medium">
-                    {isTwitchConnected ? 'Connected' : 'Disconnected'}
-                  </span>
-                </div>
-                
-                {/* EventSub Status */}
-                <div className={`flex items-center px-4 py-2 rounded-lg ${
-                  isEventSubRunning ? 'bg-purple-500/20 text-purple-400' : 'bg-gray-600/20 text-gray-400'
-                }`}>
-                  <div className={`w-2 h-2 rounded-full mr-2 ${
-                    isEventSubRunning ? 'bg-purple-400' : 'bg-gray-500'
-                  }`}></div>
-                  <span className="text-sm font-medium">
-                    EventSub {isEventSubRunning ? 'Running' : 'Stopped'}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {!isTwitchConnected ? (
-              <div className="space-y-4">
-                <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-4">
-                  <h4 className="text-blue-400 font-medium mb-2">Automatic Setup</h4>
-                  <p className="text-gray-300 text-sm mb-3">
-                    When you start hosting the server, the system will automatically:
-                  </p>
-                  <ul className="text-gray-300 text-sm space-y-1">
-                    <li>• Check if your Twitch tokens are valid</li>
-                    <li>• If valid: Start EventSub immediately</li>
-                    <li>• If invalid: Guide you through authentication, then start EventSub</li>
-                  </ul>
-                </div>
-                
-                <p className="text-gray-300 text-sm">
-                  You can also manually connect to Twitch now by going to Settings:
-                </p>
-                
-                <Link to="/settings">
-                  <motion.button
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.98 }}
-                    className="flex items-center px-6 py-3 bg-purple-500 hover:bg-purple-600 text-white rounded-lg font-medium transition-colors"
-                  >
-                    <ExternalLink className="w-4 h-4 mr-2" />
-                    Go to Settings to Connect
-                  </motion.button>
-                </Link>
-                
-                {twitchStatus && (
-                  <p className="text-sm text-gray-400">{twitchStatus}</p>
-                )}
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <div className="flex items-center justify-between p-4 bg-green-500/10 border border-green-500/20 rounded-lg">
-                  <div>
-                    <p className="text-green-400 font-medium">
-                      Connected as {twitchUser?.display_name || 'Unknown User'}
-                    </p>
-                    <p className="text-gray-400 text-sm">
-                      {isEventSubRunning 
-                        ? 'EventSub is active - channel point redemptions will be sent through encrypted audio channel'
-                        : 'Ready for EventSub - will start automatically when hosting server'
-                      }
-                    </p>
-                  </div>
-                  
-                  <div className="flex space-x-2">
-                    {isEventSubRunning && (
-                      <motion.button
-                        whileHover={{ scale: 1.05 }}
-                        whileTap={{ scale: 0.95 }}
-                        onClick={simulateRedemption}
-                        className="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg text-sm font-medium transition-colors"
-                      >
-                        Test Redemption
-                      </motion.button>
-                    )}
-                    
-                    <motion.button
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
-                      onClick={disconnectFromTwitch}
-                      className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg text-sm font-medium transition-colors"
-                    >
-                      Disconnect
-                    </motion.button>
-                  </div>
-                </div>
-                
-                {(isStartingEventSub || twitchStatus) && (
-                  <div className="flex items-center p-3 bg-gray-700/30 border border-gray-600/30 rounded-lg">
-                    {isStartingEventSub && (
-                      <div className="w-4 h-4 border-2 border-purple-400/30 border-t-purple-400 rounded-full animate-spin mr-3"></div>
-                    )}
-                    <p className="text-sm text-gray-300">{twitchStatus}</p>
-                  </div>
-                )}
-              </div>
-            )}
+            <TwitchIntegration onHostAsServer={handleTwitchHostServer} />
           </motion.div>
 
           {/* Server Logs */}
           <motion.div
             initial={{ y: 20, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
-            transition={{ duration: 0.5, delay: 0.4 }}
+            transition={{ duration: 0.5, delay: 0.5 }}
             className="mt-8 bg-gray-800/30 border border-gray-700/30 rounded-xl p-6"
           >
             <h3 className="text-lg font-semibold text-white mb-4">Server Logs</h3>

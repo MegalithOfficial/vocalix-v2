@@ -1,8 +1,72 @@
 import { motion } from 'framer-motion';
-import { Link } from 'react-router-dom';
-import { Server, Monitor, Settings, AudioWaveform } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import { Server, Monitor, Settings, AudioWaveform, Loader2 } from 'lucide-react';
+import { useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 
 const HomePage = () => {
+  const navigate = useNavigate();
+  const [isValidating, setIsValidating] = useState(false);
+  const [validationStep, setValidationStep] = useState('');
+
+  const handleHostServer = async () => {
+    setIsValidating(true);
+    
+    try {
+      // Step 1: Check if credentials are saved
+      setValidationStep('Checking saved credentials...');
+      await new Promise(resolve => setTimeout(resolve, 500)); // Small delay for UX
+      
+      const hasCredentials = await invoke('twitch_has_saved_credentials') as boolean;
+      if (!hasCredentials) {
+        setValidationStep('No credentials found');
+        // Navigate to server page to set up authentication
+        navigate('/server');
+        return;
+      }
+
+      // Step 2: Validate access and refresh tokens
+      setValidationStep('Validating tokens...');
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      const isAuthenticated = await invoke('twitch_is_authenticated') as boolean;
+      if (!isAuthenticated) {
+        setValidationStep('Tokens invalid or expired');
+        // Navigate to server page to re-authenticate
+        navigate('/server');
+        return;
+      }
+
+      // Step 3: Verify client ID and required credentials
+      setValidationStep('Verifying credentials...');
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      const credentials = await invoke('twitch_load_credentials') as [string, string | null];
+      const [clientId] = credentials;
+      
+      if (!clientId) {
+        setValidationStep('Client ID missing');
+        navigate('/server');
+        return;
+      }
+
+      // Step 4: All checks passed, proceed to EventSub connection
+      setValidationStep('Starting EventSub connection...');
+      await new Promise(resolve => setTimeout(resolve, 300));
+      
+      // Navigate to the connecting page
+      navigate('/connecting-eventsub');
+      
+    } catch (error) {
+      console.error('Validation failed:', error);
+      setValidationStep('Validation failed');
+      // Navigate to server page to handle the error
+      navigate('/server');
+    } finally {
+      setIsValidating(false);
+      setValidationStep('');
+    }
+  };
   const containerVariants = {
     hidden: { opacity: 0 },
     visible: {
@@ -28,7 +92,22 @@ const HomePage = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-black to-gray-900 flex overflow-y-auto overflow-x-hidden">
+    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-black to-gray-900 flex overflow-y-auto overflow-x-hidden relative">
+      {/* Full-screen loading overlay */}
+      {isValidating && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 bg-black/50 backdrop-blur-md flex items-center justify-center z-50"
+        >
+          <div className="flex flex-col items-center">
+            <Loader2 className="w-12 h-12 text-purple-400 animate-spin mb-4" />
+            <span className="text-purple-400 text-lg font-medium">{validationStep}</span>
+          </div>
+        </motion.div>
+      )}
+
       {/* Left Panel - Branding */}
       <motion.div
         initial={{ x: -50, opacity: 0 }}
@@ -84,28 +163,27 @@ const HomePage = () => {
         >
           {/* Server Option */}
           <motion.div variants={itemVariants}>
-            <Link to="/server">
-              <motion.div
-                whileHover={{ scale: 1.02, x: 5 }}
-                whileTap={{ scale: 0.98 }}
-                className="group bg-gray-800/50 border border-gray-700/50 rounded-2xl p-6 cursor-pointer transition-all duration-300 hover:bg-gray-800/70 hover:border-purple-500/30"
-              >
-                <div className="flex items-center">
-                  <div className="w-14 h-14 bg-gradient-to-br from-purple-500 to-purple-600 rounded-xl flex items-center justify-center mr-6 group-hover:scale-110 transition-transform duration-300">
-                    <Server className="w-7 h-7 text-white" />
-                  </div>
-                  <div className="flex-1">
-                    <h3 className="text-xl font-semibold text-white mb-1">Host Server</h3>
-                    <p className="text-gray-400 text-sm">Start a secure server and accept client connections</p>
-                  </div>
-                  <div className="text-purple-400 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                    </svg>
-                  </div>
+            <motion.div
+              whileHover={{ scale: 1.02, x: 5 }}
+              whileTap={{ scale: 0.98 }}
+              onClick={handleHostServer}
+              className="group bg-gray-800/50 border border-gray-700/50 rounded-2xl p-6 cursor-pointer transition-all duration-300 hover:bg-gray-800/70 hover:border-purple-500/30 relative overflow-hidden"
+            >
+              <div className="flex items-center">
+                <div className="w-14 h-14 bg-gradient-to-br from-purple-500 to-purple-600 rounded-xl flex items-center justify-center mr-6 group-hover:scale-110 transition-transform duration-300">
+                  <Server className="w-7 h-7 text-white" />
                 </div>
-              </motion.div>
-            </Link>
+                <div className="flex-1">
+                  <h3 className="text-xl font-semibold text-white mb-1">Host Server</h3>
+                  <p className="text-gray-400 text-sm">Start a secure server and accept client connections</p>
+                </div>
+                <div className="text-purple-400 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
+                </div>
+              </div>
+            </motion.div>
           </motion.div>
 
           {/* Client Option */}

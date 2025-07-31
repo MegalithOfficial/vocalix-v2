@@ -5,6 +5,7 @@ import HomePage from './pages/HomePage';
 import ServerPage from './pages/ServerPage';
 import ClientPage from './pages/ClientPage';
 import SettingsPage from './pages/SettingsPage';
+import ConnectingEventSub from './pages/ConnectingEventSub';
 import './App.css';
 
 function App() {
@@ -16,6 +17,7 @@ function App() {
           <Route path="/server" element={<ServerPage />} />
           <Route path="/client" element={<ClientPage />} />
           <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/connecting-eventsub" element={<ConnectingEventSub />} />
         </Routes>
       </AnimatePresence>
     </Router>

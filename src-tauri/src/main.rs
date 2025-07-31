@@ -188,27 +188,50 @@ async fn send_redemption_with_timer(
 
 #[tauri::command]
 async fn open_url(url: String) -> Result<(), String> {
+    println!("Attempting to open URL: {}", url);
+    
     #[cfg(target_os = "windows")]
     {
         std::process::Command::new("cmd")
-            .args(["/C", "start", &url])
+            .args(["/C", "start", "", &url]) // Added empty string for title to handle URLs with special chars
             .spawn()
-            .map_err(|e| format!("Failed to open URL: {}", e))?;
+            .map_err(|e| format!("Failed to open URL on Windows: {}", e))?;
     }
     #[cfg(target_os = "macos")]
     {
         std::process::Command::new("open")
             .arg(&url)
             .spawn()
-            .map_err(|e| format!("Failed to open URL: {}", e))?;
+            .map_err(|e| format!("Failed to open URL on macOS: {}", e))?;
     }
     #[cfg(target_os = "linux")]
     {
-        std::process::Command::new("xdg-open")
-            .arg(&url)
-            .spawn()
-            .map_err(|e| format!("Failed to open URL: {}", e))?;
+        // Try multiple fallback options for Linux
+        let commands = ["xdg-open", "gnome-open", "kde-open", "firefox", "chromium", "google-chrome"];
+        let mut success = false;
+        
+        for cmd in &commands {
+            if let Ok(mut child) = std::process::Command::new(cmd)
+                .arg(&url)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+            {
+                // Don't wait for the command to finish, just let it run
+                let _ = child.wait();
+                success = true;
+                println!("Successfully opened URL with: {}", cmd);
+                break;
+            }
+        }
+        
+        if !success {
+            return Err(format!("Failed to open URL on Linux. Tried: {:?}. Please open manually: {}", commands, url));
+        }
     }
+    
+    println!("URL opened successfully");
     Ok(())
 }
 
@@ -225,33 +248,72 @@ async fn twitch_authenticate(
     
     let auth_manager = TwitchAuthManager::new(client_id, client_secret);
     
-    match auth_manager.authenticate().await {
-        Ok((_tokens, user_instructions)) => {
+    // Start the device flow and get device code info immediately
+    match auth_manager.start_device_flow_async().await {
+        Ok(device_response) => {
             // Store the auth manager in state
-            *twitch_state.auth_manager.lock().await = Some(auth_manager);
+            *twitch_state.auth_manager.lock().await = Some(auth_manager.clone());
             
-            // Emit user instructions for the UI
-            window.emit("TWITCH_DEVICE_CODE", user_instructions).unwrap();
+            // Create user instructions with the verification URI
+            let user_instructions = if device_response.verification_uri.contains("device-code=") {
+                // The URI already contains the device code
+                format!(
+                    "Please visit {} to complete authentication", 
+                    device_response.verification_uri
+                )
+            } else {
+                // Need to provide both URI and code separately
+                format!(
+                    "Please visit {} and enter code: {}", 
+                    device_response.verification_uri, 
+                    device_response.user_code
+                )
+            };
             
-            // Get user info to return
-            if let Some(auth_manager) = twitch_state.auth_manager.lock().await.as_ref() {
-                match auth_manager.get_user_info().await {
-                    Ok(user_info) => {
-                        window.emit("TWITCH_AUTH_SUCCESS", &user_info).unwrap();
-                        Ok(format!("Authenticated as {}", user_info.display_name))
+            // Create structured device code info for the frontend
+            let device_code_info = serde_json::json!({
+                "device_code": device_response.device_code,
+                "verification_uri": device_response.verification_uri,
+                "user_code": device_response.user_code,
+                "expires_in": device_response.expires_in,
+                "interval": device_response.interval,
+                "instructions": user_instructions
+            });
+            
+            // Emit device code info for the UI immediately
+            window.emit("TWITCH_DEVICE_CODE", &device_code_info).unwrap();
+            window.emit("STATUS_UPDATE", "Device code generated. Please complete authorization in your browser.").unwrap();
+            
+            // Start polling in the background
+            let window_clone = window.clone();
+            let auth_manager_clone = auth_manager.clone();
+            let device_response_clone = device_response.clone();
+            
+            tokio::spawn(async move {
+                match auth_manager_clone.complete_device_flow(&device_response_clone).await {
+                    Ok(_tokens) => {
+                        // Get user info after successful authentication
+                        match auth_manager_clone.get_user_info().await {
+                            Ok(user_info) => {
+                                window_clone.emit("TWITCH_AUTH_SUCCESS", &user_info).unwrap();
+                                window_clone.emit("STATUS_UPDATE", format!("Successfully authenticated as {}", user_info.display_name)).unwrap();
+                            }
+                            Err(e) => {
+                                window_clone.emit("ERROR", format!("Failed to get user info: {}", e)).unwrap();
+                            }
+                        }
                     }
                     Err(e) => {
-                        window.emit("ERROR", format!("Failed to get user info: {}", e)).unwrap();
-                        Err(format!("Failed to get user info: {}", e))
+                        window_clone.emit("ERROR", format!("Authentication polling failed: {}", e)).unwrap();
                     }
                 }
-            } else {
-                Err("Auth manager not found in state".to_string())
-            }
+            });
+            
+            Ok("Device code flow started. Please complete authorization in your browser.".to_string())
         }
         Err(e) => {
-            window.emit("ERROR", format!("Twitch authentication failed: {}", e)).unwrap();
-            Err(format!("Authentication failed: {}", e))
+            window.emit("ERROR", format!("Failed to start device flow: {}", e)).unwrap();
+            Err(format!("Failed to start authentication: {}", e))
         }
     }
 }
@@ -261,6 +323,15 @@ async fn twitch_start_event_listener(
     window: Window,
     twitch_state: State<'_, TwitchState>
 ) -> Result<(), String> {
+    // Check if there's already an active EventSub connection
+    {
+        let event_sub_guard = twitch_state.event_sub.lock().await;
+        if event_sub_guard.is_some() {
+            window.emit("STATUS_UPDATE", "EventSub already connected").unwrap();
+            return Ok(());
+        }
+    }
+
     // Clone the auth manager before the scope ends
     let auth_manager = {
         let auth_guard = twitch_state.auth_manager.lock().await;
@@ -339,6 +410,15 @@ async fn twitch_start_event_listener(
 }
 
 #[tauri::command]
+async fn twitch_stop_event_listener(
+    twitch_state: State<'_, TwitchState>
+) -> Result<(), String> {
+    // Clear the EventSub instance
+    *twitch_state.event_sub.lock().await = None;
+    Ok(())
+}
+
+#[tauri::command]
 async fn twitch_get_user_info(twitch_state: State<'_, TwitchState>) -> Result<serde_json::Value, String> {
     // Clone the auth manager before the scope ends
     let auth_manager = {
@@ -377,6 +457,144 @@ async fn twitch_sign_out(
 async fn twitch_is_authenticated(twitch_state: State<'_, TwitchState>) -> Result<bool, String> {
     let auth_manager_exists = twitch_state.auth_manager.lock().await.is_some();
     Ok(auth_manager_exists && TwitchAuthManager::is_authenticated())
+}
+
+#[tauri::command]
+async fn twitch_save_credentials(
+    client_id: String,
+    client_secret: Option<String>
+) -> Result<(), String> {
+    TwitchAuthManager::save_client_credentials(&client_id, client_secret.as_deref())
+        .map_err(|e| format!("Failed to save credentials: {}", e))
+}
+
+#[tauri::command]
+async fn twitch_load_credentials() -> Result<(String, Option<String>), String> {
+    TwitchAuthManager::load_client_credentials()
+        .map_err(|e| format!("Failed to load credentials: {}", e))
+}
+
+#[tauri::command]
+async fn twitch_has_saved_credentials() -> bool {
+    TwitchAuthManager::has_saved_credentials()
+}
+
+#[tauri::command]
+async fn twitch_delete_credentials() -> Result<(), String> {
+    TwitchAuthManager::delete_client_credentials()
+        .map_err(|e| format!("Failed to delete credentials: {}", e))
+}
+
+#[tauri::command]
+async fn twitch_get_auth_status(
+    twitch_state: State<'_, TwitchState>
+) -> Result<String, String> {
+    // Try to create auth manager from saved credentials
+    let auth_manager = match TwitchAuthManager::from_saved_credentials() {
+        Ok(manager) => {
+            // Store it in state
+            *twitch_state.auth_manager.lock().await = Some(manager.clone());
+            manager
+        }
+        Err(_) => return Ok("no_credentials".to_string()),
+    };
+
+    match auth_manager.get_auth_status().await {
+        Ok(status) => {
+            match status {
+                twitch_oauth::AuthStatus::NotAuthenticated => Ok("not_authenticated".to_string()),
+                twitch_oauth::AuthStatus::Invalid => Ok("invalid".to_string()),
+                twitch_oauth::AuthStatus::Valid => Ok("valid".to_string()),
+                twitch_oauth::AuthStatus::ExpiringSoon(_) => Ok("expiring_soon".to_string()),
+            }
+        }
+        Err(e) => Err(format!("Failed to get auth status: {}", e)),
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct TwitchRedemption {
+    id: String,
+    title: String,
+    cost: i32,
+    enabled: bool,
+    is_enabled: bool,
+    prompt: Option<String>,
+}
+
+#[tauri::command]
+async fn get_twitch_redemptions(
+    twitch_state: State<'_, TwitchState>
+) -> Result<Vec<TwitchRedemption>, String> {
+    // Get the auth manager
+    let auth_manager = {
+        let auth_guard = twitch_state.auth_manager.lock().await;
+        match auth_guard.as_ref() {
+            Some(manager) => manager.clone(),
+            None => return Err("Not authenticated with Twitch".to_string()),
+        }
+    };
+
+    // Get user info to get the broadcaster ID
+    let user_info = auth_manager.get_user_info().await
+        .map_err(|e| format!("Failed to get user info: {}", e))?;
+    
+    let broadcaster_id = user_info.id;
+    
+    // Get valid tokens
+    let tokens = auth_manager.get_valid_tokens().await
+        .map_err(|e| format!("Failed to get access token: {}", e))?;
+    let access_token = tokens.access_token;
+    
+    // Get client ID
+    let (client_id, _) = TwitchAuthManager::load_client_credentials()
+        .map_err(|e| format!("Failed to load client credentials: {}", e))?;
+
+    // Make API request to Twitch
+    let client = reqwest::Client::new();
+    let url = format!("https://api.twitch.tv/helix/channel_points/custom_rewards?broadcaster_id={}", broadcaster_id);
+    
+    let response = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", access_token))
+        .header("Client-Id", client_id)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to make API request: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("API request failed with status: {}", response.status()));
+    }
+
+    let api_response: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse JSON response: {}", e))?;
+
+    // Parse the redemptions
+    let mut redemptions = Vec::new();
+    if let Some(data) = api_response.get("data").and_then(|d| d.as_array()) {
+        for item in data {
+            if let Ok(redemption) = serde_json::from_value::<serde_json::Value>(item.clone()) {
+                let id = redemption.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let title = redemption.get("title").and_then(|v| v.as_str()).unwrap_or("Unknown").to_string();
+                let cost = redemption.get("cost").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                let enabled = redemption.get("is_enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+                let prompt = redemption.get("prompt").and_then(|v| v.as_str()).map(|s| s.to_string());
+
+                redemptions.push(TwitchRedemption {
+                    id,
+                    title,
+                    cost,
+                    enabled,
+                    is_enabled: enabled,
+                    prompt,
+                });
+            }
+        }
+    }
+
+    Ok(redemptions)
 }
 
 // Helper function to handle Twitch EventSub events
@@ -1020,7 +1238,6 @@ async fn decrypt_message(
         .map_err(|_| "Invalid UTF-8".to_string())
 }
 
-
 fn main() {
     let identity = pairing::load_or_create_identity().expect("Failed to get identity.");
     let known_peers = pairing::load_known_peers().expect("Failed to load peers.");
@@ -1056,10 +1273,17 @@ fn main() {
             open_url,
             twitch_authenticate,
             twitch_start_event_listener,
+            twitch_stop_event_listener,
             twitch_get_user_info,
             twitch_sign_out,
             twitch_is_authenticated,
+            twitch_save_credentials,
+            twitch_load_credentials,
+            twitch_has_saved_credentials,
+            twitch_delete_credentials,
+            twitch_get_auth_status,
+            get_twitch_redemptions,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
-}
+    }

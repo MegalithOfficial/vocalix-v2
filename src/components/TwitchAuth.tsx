@@ -26,24 +26,21 @@ export function TwitchAuth({ onAuthSuccess, onAuthError, clientId, clientSecret 
   useEffect(() => {
     // Listen for device code instructions
     const unlistenDeviceCode = listen('TWITCH_DEVICE_CODE', (event) => {
-      const instructions = event.payload as string;
       try {
-        // Parse the device code instructions from the status message
-        const deviceCodeMatch = instructions.match(/User code: (\w+)/);
-        const urlMatch = instructions.match(/(https:\/\/[^\s]+)/);
+        const deviceCodeInfo = event.payload as any;
+        console.log('Received device code info:', deviceCodeInfo);
         
-        if (deviceCodeMatch && urlMatch) {
-          setDeviceInstructions({
-            device_code: '',
-            user_code: deviceCodeMatch[1],
-            verification_uri: urlMatch[0],
-            expires_in: 1800, // 30 minutes
-            interval: 5
-          });
-          setTimeRemaining(1800);
-        }
+        setDeviceInstructions({
+          device_code: deviceCodeInfo.device_code || '',
+          user_code: deviceCodeInfo.user_code,
+          verification_uri: deviceCodeInfo.verification_uri,
+          expires_in: deviceCodeInfo.expires_in || 1800,
+          interval: 5
+        });
+        setTimeRemaining(deviceCodeInfo.expires_in || 1800);
       } catch (error) {
         console.error('Failed to parse device code instructions:', error);
+        setStatus('Failed to parse device code information');
       }
     });
 
