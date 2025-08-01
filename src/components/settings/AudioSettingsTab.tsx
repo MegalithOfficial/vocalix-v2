@@ -156,11 +156,12 @@ const AudioSettingsTab = ({ settingsState }: AudioSettingsTabProps) => {
 
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-2">Output Device</label>
-              <select
+                <select
                 value={selectedOutputDevice}
                 onChange={(e) => handleOutputDeviceChange(e.target.value)}
-                className="w-full px-4 py-3 bg-gray-700/50 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-purple-500"
-              >
+                className="w-full px-4 py-3 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-purple-500"
+                style={{ backgroundColor: '#374151' }} // Tailwind's gray-700
+                >
                 <option value="default">Default Output Device</option>
                 {outputDevices.map((device) => (
                   <option key={device.deviceId} value={device.deviceId}>

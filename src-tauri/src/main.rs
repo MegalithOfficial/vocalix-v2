@@ -1366,19 +1366,19 @@ def v(p, i):
 print(json.dumps({"rvc-python":v("rvc-python","rvc"),"edge-tts":v("edge-tts","edge_tts"),"torch":v("torch","torch"),"torchaudio":v("torchaudio","torchaudio")}, indent=2))
 "#;
 
-    // Write the script to a temporary file
-    let temp_script = "check_versions_temp.py";
-    fs::write(temp_script, script_content)
+    // Write the script to a temporary file in the pythonenv directory
+    let temp_script = pythonenv_path.join("check_versions_temp.py");
+    fs::write(&temp_script, script_content)
         .map_err(|e| format!("Failed to write temporary script: {}", e))?;
 
     // Execute the script
     let output = Command::new(&python_path)
-        .arg(temp_script)
+        .arg(&temp_script)
         .output()
         .map_err(|e| format!("Failed to execute version check script: {}", e))?;
 
     // Clean up the temporary file
-    let _ = fs::remove_file(temp_script);
+    let _ = fs::remove_file(&temp_script);
 
     if output.status.success() {
         let output_str = String::from_utf8_lossy(&output.stdout);
@@ -1394,18 +1394,24 @@ print(json.dumps({"rvc-python":v("rvc-python","rvc"),"edge-tts":v("edge-tts","ed
 
 async fn get_library_versions_internal() -> Result<serde_json::Value, String> {
     use std::process::Command;
-    use std::path::Path;
     use std::fs;
     
-    let python_path = if Path::new("pythonenv").exists() {
-        if cfg!(windows) {
-            "pythonenv/Scripts/python.exe"
-        } else {
-            "pythonenv/bin/python"
-        }
-    } else {
-        return Err("Virtual environment not found".to_string());
+    // Get the AppData directory
+    let data_dir = match dirs::data_dir() {
+        Some(dir) => dir,
+        None => return Err("Could not determine data directory".to_string()),
     };
+    let pythonenv_path = data_dir.join("vocalix-v2").join("pythonenv");
+    
+    let python_path = if cfg!(windows) {
+        pythonenv_path.join("Scripts").join("python.exe")
+    } else {
+        pythonenv_path.join("bin").join("python")
+    };
+
+    if !python_path.exists() {
+        return Err("Python executable not found in virtual environment".to_string());
+    }
 
     // Create a temporary Python script to check package versions
     let script_content = r#"
@@ -1420,19 +1426,19 @@ def v(p, i):
 print(json.dumps({"rvc-python":v("rvc-python","rvc"),"edge-tts":v("edge-tts","edge_tts"),"torch":v("torch","torch"),"torchaudio":v("torchaudio","torchaudio")}, indent=2))
 "#;
 
-    // Write the script to a temporary file
-    let temp_script = "check_versions_temp.py";
-    fs::write(temp_script, script_content)
+    // Write the script to a temporary file in the pythonenv directory
+    let temp_script = pythonenv_path.join("check_versions_temp.py");
+    fs::write(&temp_script, script_content)
         .map_err(|e| format!("Failed to write temporary script: {}", e))?;
 
     // Execute the script
-    let output = Command::new(python_path)
-        .arg(temp_script)
+    let output = Command::new(&python_path)
+        .arg(&temp_script)
         .output()
         .map_err(|e| format!("Failed to execute version check script: {}", e))?;
 
     // Clean up the temporary file
-    let _ = fs::remove_file(temp_script);
+    let _ = fs::remove_file(&temp_script);
 
     if output.status.success() {
         let output_str = String::from_utf8_lossy(&output.stdout);
