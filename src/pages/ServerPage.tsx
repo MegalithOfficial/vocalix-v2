@@ -28,6 +28,7 @@ const ServerPage = () => {
 
   const copyConnectionInfo = () => {
     navigator.clipboard.writeText(`${serverIP}:${serverPort}`);
+    
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };

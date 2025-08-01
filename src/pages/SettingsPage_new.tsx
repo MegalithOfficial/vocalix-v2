@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion';
 import { useState } from 'react';
-import { ArrowLeft, Volume2, Shield, Twitch, Volume, Settings2, FileText } from 'lucide-react';
+import { ArrowLeft, Volume2, Shield, Twitch, Volume, Settings2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useSettingsState } from '../hooks/useSettingsState';
 import { SettingsTab } from '../types/settings';
@@ -11,7 +11,6 @@ import AudioSettingsTab from '../components/settings/AudioSettingsTab';
 import TTSSettingsTab from '../components/settings/TTSSettingsTab';
 import PythonEnvironmentTab from '../components/settings/PythonEnvironmentTab';
 import SecuritySettingsTab from '../components/settings/SecuritySettingsTab';
-import LogsSettingsTab from '../components/settings/LogsSettingsTab';
 
 const SettingsPage = () => {
     const [activeTab, setActiveTab] = useState<SettingsTab>('twitch');
@@ -23,7 +22,6 @@ const SettingsPage = () => {
         { id: 'tts' as SettingsTab, label: 'Text to Speech', icon: Volume, color: 'orange' },
         { id: 'python-env' as SettingsTab, label: 'Python Environment', icon: Settings2, color: 'yellow' },
         { id: 'security' as SettingsTab, label: 'Security & Privacy', icon: Shield, color: 'green' },
-        { id: 'logs' as SettingsTab, label: 'Application Logs', icon: FileText, color: 'red' },
     ];
 
     const renderTabContent = () => {
@@ -38,8 +36,6 @@ const SettingsPage = () => {
                 return <PythonEnvironmentTab settingsState={settingsState} />;
             case 'security':
                 return <SecuritySettingsTab settingsState={settingsState} />;
-            case 'logs':
-                return <LogsSettingsTab />;
             default:
                 return null;
         }
@@ -80,7 +76,6 @@ const SettingsPage = () => {
                                 pink: isActive ? 'bg-pink-600/20 text-pink-400 border-pink-500/30' : 'hover:bg-pink-500/10 hover:text-pink-400',
                                 orange: isActive ? 'bg-orange-600/20 text-orange-400 border-orange-500/30' : 'hover:bg-orange-500/10 hover:text-orange-400',
                                 yellow: isActive ? 'bg-yellow-600/20 text-yellow-400 border-yellow-500/30' : 'hover:bg-yellow-500/10 hover:text-yellow-400',
-                                red: isActive ? 'bg-red-600/20 text-red-400 border-red-500/30' : 'hover:bg-red-500/10 hover:text-red-400',
                             };
 
                             return (

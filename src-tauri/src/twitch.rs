@@ -1,14 +1,14 @@
 use anyhow::{anyhow, Result};
+use chrono::{DateTime, Utc};
+use futures_util::{SinkExt, StreamExt};
+use reqwest;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::sync::{Mutex, mpsc, RwLock};
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
-use futures_util::{SinkExt, StreamExt};
-use url::Url;
-use chrono::{DateTime, Utc};
-use reqwest;
 use std::time::Duration;
-use tracing::{info, warn, error, debug, instrument};
+use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
+use tracing::{debug, error, info, instrument, warn};
+use url::Url;
 
 // EventSub WebSocket endpoint
 const EVENTSUB_WEBSOCKET_URL: &str = "wss://eventsub.wss.twitch.tv/ws";
@@ -196,30 +196,36 @@ impl TwitchEventSub {
 
     async fn set_connection_state(&self, state: EventSubConnectionState) {
         *self.connection_state.write().await = state.clone();
-        self.emit_event(EventSubEvent::ConnectionStateChanged(state)).await;
+        self.emit_event(EventSubEvent::ConnectionStateChanged(state))
+            .await;
     }
 
     /// Connect to EventSub WebSocket with proper reconnection logic
     #[instrument(skip(self))]
     pub async fn connect(&self) -> Result<()> {
-        self.set_connection_state(EventSubConnectionState::Connecting).await;
-        
+        self.set_connection_state(EventSubConnectionState::Connecting)
+            .await;
+
         let mut reconnect_url = None;
         loop {
             // Check if we should give up after too many attempts
             let attempts = *self.reconnect_attempts.lock().await;
             if attempts >= MAX_RECONNECT_ATTEMPTS {
-                self.set_connection_state(EventSubConnectionState::Failed).await;
-                return Err(anyhow!("Maximum reconnect attempts ({}) exceeded", MAX_RECONNECT_ATTEMPTS));
+                self.set_connection_state(EventSubConnectionState::Failed)
+                    .await;
+                return Err(anyhow!(
+                    "Maximum reconnect attempts ({}) exceeded",
+                    MAX_RECONNECT_ATTEMPTS
+                ));
             }
 
             let connection_result = self.connect_internal(reconnect_url.clone()).await;
-            
+
             match connection_result {
                 Ok(new_reconnect_url) => {
                     // Reset reconnect attempts on successful connection
                     *self.reconnect_attempts.lock().await = 0;
-                    
+
                     // If we got a reconnect URL, use it for the next connection
                     if let Some(url) = new_reconnect_url {
                         reconnect_url = Some(url);
@@ -232,15 +238,16 @@ impl TwitchEventSub {
                 Err(e) => {
                     *self.reconnect_attempts.lock().await += 1;
                     error!("Connection failed (attempt {}): {}", attempts + 1, e);
-                    
+
                     // Wait before reconnecting
                     tokio::time::sleep(Duration::from_secs(5)).await;
                     continue;
                 }
             }
         }
-        
-        self.set_connection_state(EventSubConnectionState::Disconnected).await;
+
+        self.set_connection_state(EventSubConnectionState::Disconnected)
+            .await;
         Ok(())
     }
 
@@ -248,13 +255,15 @@ impl TwitchEventSub {
     async fn connect_internal(&self, reconnect_url: Option<String>) -> Result<Option<String>> {
         let url = reconnect_url.unwrap_or_else(|| EVENTSUB_WEBSOCKET_URL.to_string());
         info!("Connecting to EventSub WebSocket: {}", url);
-        
+
         let url = Url::parse(&url)?;
-        let (ws_stream, _) = connect_async(url).await
+        let (ws_stream, _) = connect_async(url)
+            .await
             .map_err(|e| anyhow!("Failed to connect to WebSocket: {}", e))?;
 
         let (mut write, mut read) = ws_stream.split();
-        self.set_connection_state(EventSubConnectionState::Connected).await;
+        self.set_connection_state(EventSubConnectionState::Connected)
+            .await;
 
         // Start keepalive monitoring
         let mut keepalive_interval = tokio::time::interval(DEFAULT_KEEPALIVE_TIMEOUT);
@@ -300,7 +309,7 @@ impl TwitchEventSub {
                             let reason = close_frame.as_ref()
                                 .map(|f| f.reason.to_string())
                                 .unwrap_or_else(|| "Unknown".to_string());
-                            
+
                             warn!("WebSocket closed with code {}: {}", code, reason);
                             self.handle_close_code(code).await;
                             return Ok(None);
@@ -316,7 +325,7 @@ impl TwitchEventSub {
                         _ => {}
                     }
                 }
-                
+
                 // Monitor keepalive timeout
                 _ = keepalive_interval.tick() => {
                     let elapsed = last_message_time.elapsed();
@@ -335,8 +344,9 @@ impl TwitchEventSub {
                 &self.client_id,
                 &self.access_token,
                 &session.id,
-                user_id
-            ).await
+                user_id,
+            )
+            .await
         } else {
             Err(anyhow!("No WebSocket session available"))
         }
@@ -356,81 +366,104 @@ impl TwitchEventSub {
     #[instrument(skip(self, text))]
     async fn handle_websocket_message(&self, text: &str) -> Result<Option<String>> {
         debug!("Received WebSocket message: {}", text);
-        
+
         let message: EventSubMessage = serde_json::from_str(text)
             .map_err(|e| anyhow!("Failed to parse EventSub message: {}", e))?;
 
-        info!("Received EventSub message type: {}", message.metadata.message_type);
+        info!(
+            "Received EventSub message type: {}",
+            message.metadata.message_type
+        );
 
         match message.metadata.message_type.as_str() {
             "session_welcome" => {
                 let payload: EventSubWelcomePayload = serde_json::from_value(message.payload)
                     .map_err(|e| anyhow!("Failed to parse welcome payload: {}", e))?;
-                
+
                 info!("WebSocket session established: {}", payload.session.id);
                 *self.session.write().await = Some(payload.session.clone());
-                
-                self.emit_event(EventSubEvent::SessionWelcome(payload.session)).await;
+
+                self.emit_event(EventSubEvent::SessionWelcome(payload.session))
+                    .await;
                 Ok(None)
             }
-            
+
             "session_keepalive" => {
                 debug!("Received keepalive message");
                 self.emit_event(EventSubEvent::Keepalive).await;
                 Ok(None)
             }
-            
+
             "session_reconnect" => {
                 let payload: EventSubReconnectPayload = serde_json::from_value(message.payload)
                     .map_err(|e| anyhow!("Failed to parse reconnect payload: {}", e))?;
-                
-                info!("Reconnect requested to: {:?}", payload.session.reconnect_url);
-                self.set_connection_state(EventSubConnectionState::Reconnecting).await;
-                
-                self.emit_event(EventSubEvent::SessionReconnect(payload.session.clone())).await;
-                
+
+                info!(
+                    "Reconnect requested to: {:?}",
+                    payload.session.reconnect_url
+                );
+                self.set_connection_state(EventSubConnectionState::Reconnecting)
+                    .await;
+
+                self.emit_event(EventSubEvent::SessionReconnect(payload.session.clone()))
+                    .await;
+
                 // Return the reconnect URL
                 Ok(payload.session.reconnect_url)
             }
-            
+
             "notification" => {
                 let payload: EventSubNotificationPayload = serde_json::from_value(message.payload)
                     .map_err(|e| anyhow!("Failed to parse notification payload: {}", e))?;
-                
-                let subscription_type = message.metadata.subscription_type
+
+                let subscription_type = message
+                    .metadata
+                    .subscription_type
                     .ok_or_else(|| anyhow!("Missing subscription_type in notification"))?;
-                let subscription_version = message.metadata.subscription_version
+                let subscription_version = message
+                    .metadata
+                    .subscription_version
                     .ok_or_else(|| anyhow!("Missing subscription_version in notification"))?;
-                
-                info!("Received event notification: {} v{}", subscription_type, subscription_version);
-                
+
+                info!(
+                    "Received event notification: {} v{}",
+                    subscription_type, subscription_version
+                );
+
                 self.emit_event(EventSubEvent::Notification {
                     subscription_type,
                     subscription_version,
                     subscription: payload.subscription,
                     event: payload.event,
-                }).await;
-                
+                })
+                .await;
+
                 Ok(None)
             }
-            
+
             "revocation" => {
                 let payload: EventSubRevocationPayload = serde_json::from_value(message.payload)
                     .map_err(|e| anyhow!("Failed to parse revocation payload: {}", e))?;
-                
-                let subscription_type = message.metadata.subscription_type
+
+                let subscription_type = message
+                    .metadata
+                    .subscription_type
                     .ok_or_else(|| anyhow!("Missing subscription_type in revocation"))?;
-                
-                warn!("Subscription revoked: {} (status: {})", subscription_type, payload.subscription.status);
-                
+
+                warn!(
+                    "Subscription revoked: {} (status: {})",
+                    subscription_type, payload.subscription.status
+                );
+
                 self.emit_event(EventSubEvent::Revocation {
                     subscription_type,
                     subscription: payload.subscription,
-                }).await;
-                
+                })
+                .await;
+
                 Ok(None)
             }
-            
+
             _ => {
                 warn!("Unknown message type: {}", message.metadata.message_type);
                 Ok(None)
@@ -441,16 +474,22 @@ impl TwitchEventSub {
     async fn handle_close_code(&self, code: u16) {
         let error_message = match code {
             CLOSE_CODE_INTERNAL_SERVER_ERROR => "Internal server error".to_string(),
-            CLOSE_CODE_CLIENT_SENT_INBOUND_TRAFFIC => "Client sent inbound traffic (only pong messages allowed)".to_string(),
-            CLOSE_CODE_CLIENT_FAILED_PING_PONG => "Client failed to respond to ping messages".to_string(),
-            CLOSE_CODE_CONNECTION_UNUSED => "Connection unused - no subscription created within timeout".to_string(),
+            CLOSE_CODE_CLIENT_SENT_INBOUND_TRAFFIC => {
+                "Client sent inbound traffic (only pong messages allowed)".to_string()
+            }
+            CLOSE_CODE_CLIENT_FAILED_PING_PONG => {
+                "Client failed to respond to ping messages".to_string()
+            }
+            CLOSE_CODE_CONNECTION_UNUSED => {
+                "Connection unused - no subscription created within timeout".to_string()
+            }
             CLOSE_CODE_RECONNECT_GRACE_TIME_EXPIRED => "Reconnect grace time expired".to_string(),
             CLOSE_CODE_NETWORK_TIMEOUT => "Network timeout".to_string(),
             CLOSE_CODE_NETWORK_ERROR => "Network error".to_string(),
             CLOSE_CODE_INVALID_RECONNECT => "Invalid reconnect URL".to_string(),
             _ => format!("Unknown close code: {}", code),
         };
-        
+
         error!("WebSocket closed: {}", error_message);
         self.emit_event(EventSubEvent::Error(error_message)).await;
     }
@@ -461,7 +500,10 @@ impl TwitchEventSub {
         session_id: &str,
         user_id: &str,
     ) -> Result<()> {
-        info!("Subscribing to channel points redemptions for user: {}", user_id);
+        info!(
+            "Subscribing to channel points redemptions for user: {}",
+            user_id
+        );
 
         let subscription_data = serde_json::json!({
             "type": "channel.channel_points_custom_reward_redemption.add",
@@ -491,7 +533,11 @@ impl TwitchEventSub {
         } else {
             let status = response.status();
             let error_text = response.text().await?;
-            Err(anyhow!("Failed to subscribe: HTTP {} - {}", status, error_text))
+            Err(anyhow!(
+                "Failed to subscribe: HTTP {} - {}",
+                status,
+                error_text
+            ))
         }
     }
 
@@ -506,7 +552,10 @@ impl TwitchEventSub {
             .await?;
 
         if !response.status().is_success() {
-            return Err(anyhow!("Failed to get subscriptions: HTTP {}", response.status()));
+            return Err(anyhow!(
+                "Failed to get subscriptions: HTTP {}",
+                response.status()
+            ));
         }
 
         #[derive(Deserialize)]
@@ -515,10 +564,10 @@ impl TwitchEventSub {
         }
 
         let subscriptions_response: SubscriptionsResponse = response.json().await?;
-        
+
         // Update our local subscriptions cache
         *self.subscriptions.write().await = subscriptions_response.data.clone();
-        
+
         Ok(subscriptions_response.data)
     }
 
@@ -526,14 +575,20 @@ impl TwitchEventSub {
     pub async fn delete_subscription(&self, subscription_id: &str) -> Result<()> {
         let client = reqwest::Client::new();
         let response = client
-            .delete(&format!("https://api.twitch.tv/helix/eventsub/subscriptions?id={}", subscription_id))
+            .delete(&format!(
+                "https://api.twitch.tv/helix/eventsub/subscriptions?id={}",
+                subscription_id
+            ))
             .header("Client-Id", &self.client_id)
             .header("Authorization", format!("Bearer {}", self.access_token))
             .send()
             .await?;
 
         if !response.status().is_success() {
-            return Err(anyhow!("Failed to delete subscription: HTTP {}", response.status()));
+            return Err(anyhow!(
+                "Failed to delete subscription: HTTP {}",
+                response.status()
+            ));
         }
 
         info!("Subscription {} deleted successfully", subscription_id);
@@ -541,10 +596,15 @@ impl TwitchEventSub {
     }
 
     /// Subscribe to multiple event types
-    pub async fn subscribe_to_events(&self, event_types: Vec<(&str, &str, serde_json::Value)>) -> Result<()> {
+    pub async fn subscribe_to_events(
+        &self,
+        event_types: Vec<(&str, &str, serde_json::Value)>,
+    ) -> Result<()> {
         let session = self.session.read().await;
-        let session = session.as_ref().ok_or_else(|| anyhow!("No WebSocket session available"))?;
-        
+        let session = session
+            .as_ref()
+            .ok_or_else(|| anyhow!("No WebSocket session available"))?;
+
         for (event_type, version, condition) in event_types {
             let subscription_data = serde_json::json!({
                 "type": event_type,
@@ -571,11 +631,20 @@ impl TwitchEventSub {
             } else {
                 let status = response.status();
                 let error_text = response.text().await?;
-                error!("Failed to subscribe to {} v{}: HTTP {} - {}", event_type, version, status, error_text);
-                return Err(anyhow!("Failed to subscribe to {} v{}: HTTP {} - {}", event_type, version, status, error_text));
+                error!(
+                    "Failed to subscribe to {} v{}: HTTP {} - {}",
+                    event_type, version, status, error_text
+                );
+                return Err(anyhow!(
+                    "Failed to subscribe to {} v{}: HTTP {} - {}",
+                    event_type,
+                    version,
+                    status,
+                    error_text
+                ));
             }
         }
-        
+
         Ok(())
     }
 
@@ -589,20 +658,24 @@ impl TwitchEventSub {
 }
 
 /// Parse channel points redemption from EventSub notification event data
-pub fn parse_channel_points_redemption(event: &serde_json::Value) -> Result<ChannelPointsRedemption> {
+pub fn parse_channel_points_redemption(
+    event: &serde_json::Value,
+) -> Result<ChannelPointsRedemption> {
     let redemption: ChannelPointsRedemption = serde_json::from_value(event.clone())
         .map_err(|e| anyhow!("Failed to parse channel points redemption: {}", e))?;
     Ok(redemption)
 }
 
 /// Helper function to create common event subscriptions
-pub fn create_common_subscriptions(broadcaster_user_id: &str) -> Vec<(&'static str, &'static str, serde_json::Value)> {
+pub fn create_common_subscriptions(
+    broadcaster_user_id: &str,
+) -> Vec<(&'static str, &'static str, serde_json::Value)> {
     vec![
         // Channel points redemptions
         (
             "channel.channel_points_custom_reward_redemption.add",
             "1",
-            serde_json::json!({"broadcaster_user_id": broadcaster_user_id})
+            serde_json::json!({"broadcaster_user_id": broadcaster_user_id}),
         ),
         // Follow events
         (
@@ -611,48 +684,48 @@ pub fn create_common_subscriptions(broadcaster_user_id: &str) -> Vec<(&'static s
             serde_json::json!({
                 "broadcaster_user_id": broadcaster_user_id,
                 "moderator_user_id": broadcaster_user_id
-            })
+            }),
         ),
         // Subscription events
         (
             "channel.subscribe",
             "1",
-            serde_json::json!({"broadcaster_user_id": broadcaster_user_id})
+            serde_json::json!({"broadcaster_user_id": broadcaster_user_id}),
         ),
         // Subscription gift events
         (
             "channel.subscription.gift",
             "1",
-            serde_json::json!({"broadcaster_user_id": broadcaster_user_id})
+            serde_json::json!({"broadcaster_user_id": broadcaster_user_id}),
         ),
         // Subscription message events
         (
             "channel.subscription.message",
             "1",
-            serde_json::json!({"broadcaster_user_id": broadcaster_user_id})
+            serde_json::json!({"broadcaster_user_id": broadcaster_user_id}),
         ),
         // Cheer events
         (
             "channel.cheer",
             "1",
-            serde_json::json!({"broadcaster_user_id": broadcaster_user_id})
+            serde_json::json!({"broadcaster_user_id": broadcaster_user_id}),
         ),
         // Raid events
         (
             "channel.raid",
             "1",
-            serde_json::json!({"to_broadcaster_user_id": broadcaster_user_id})
+            serde_json::json!({"to_broadcaster_user_id": broadcaster_user_id}),
         ),
         // Stream online/offline
         (
             "stream.online",
             "1",
-            serde_json::json!({"broadcaster_user_id": broadcaster_user_id})
+            serde_json::json!({"broadcaster_user_id": broadcaster_user_id}),
         ),
         (
             "stream.offline",
             "1",
-            serde_json::json!({"broadcaster_user_id": broadcaster_user_id})
+            serde_json::json!({"broadcaster_user_id": broadcaster_user_id}),
         ),
     ]
 }
@@ -683,7 +756,7 @@ mod tests {
 
         let message: EventSubMessage = serde_json::from_str(json).unwrap();
         assert_eq!(message.metadata.message_type, "session_welcome");
-        
+
         let payload: EventSubWelcomePayload = serde_json::from_value(message.payload).unwrap();
         assert_eq!(payload.session.id, "test-session-id");
         assert_eq!(payload.session.status, "connected");
@@ -694,11 +767,14 @@ mod tests {
     fn test_common_subscriptions() {
         let subscriptions = create_common_subscriptions("12345");
         assert!(!subscriptions.is_empty());
-        
-        let channel_points = subscriptions.iter()
-            .find(|(event_type, _, _)| *event_type == "channel.channel_points_custom_reward_redemption.add")
+
+        let channel_points = subscriptions
+            .iter()
+            .find(|(event_type, _, _)| {
+                *event_type == "channel.channel_points_custom_reward_redemption.add"
+            })
             .unwrap();
-        
+
         assert_eq!(channel_points.1, "1"); // version
         assert_eq!(channel_points.2["broadcaster_user_id"], "12345");
     }
@@ -706,10 +782,10 @@ mod tests {
     #[tokio::test]
     async fn test_eventsub_client_creation() {
         let client = TwitchEventSub::new("test_client_id".to_string(), "test_token".to_string());
-        
+
         let state = client.get_connection_state().await;
         matches!(state, EventSubConnectionState::Disconnected);
-        
+
         let session = client.get_session_info().await;
         assert!(session.is_none());
     }

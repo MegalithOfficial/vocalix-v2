@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { Wifi, CheckCircle, AlertCircle, Loader2, ArrowLeft, Twitch } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { logger } from '../utils/logger';
 
 const ConnectingEventSub = () => {
   const navigate = useNavigate();
@@ -68,7 +69,7 @@ const ConnectingEventSub = () => {
 
     // Listen for EventSub events
     const unlistenStatus = listen('STATUS_UPDATE', (event) => {
-      console.log('Status update:', event.payload);
+      logger.info('ConnectingEventSub', `Status update: ${event.payload}`);
     });
 
     const unlistenError = listen('ERROR', (event) => {

@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { motion } from 'framer-motion';
-import { Settings, Twitch, Shield, CheckCircle, AlertCircle, ExternalLink, Play, Copy } from 'lucide-react';
+import { Settings, Twitch, Shield, CheckCircle, AlertCircle, ExternalLink, Copy } from 'lucide-react';
+import { logger } from '../utils/logger';
 
 interface UserInfo {
   id: string;
@@ -25,7 +26,7 @@ interface TwitchIntegrationProps {
 
 type SetupStatus = 'checking' | 'needs_credentials' | 'needs_auth' | 'authenticating' | 'ready' | 'error';
 
-export default function TwitchIntegration({ onHostAsServer }: TwitchIntegrationProps) {
+export default function TwitchIntegration({}: TwitchIntegrationProps) {
   const [setupStatus, setSetupStatus] = useState<SetupStatus>('checking');
   const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -43,7 +44,7 @@ export default function TwitchIntegration({ onHostAsServer }: TwitchIntegrationP
     const unlistenDeviceCode = listen('TWITCH_DEVICE_CODE', (event) => {
       try {
         const deviceCodeInfo = event.payload as any;
-        console.log('Received device code info:', deviceCodeInfo);
+        logger.info('TwitchIntegration', `Received device code info: ${JSON.stringify(deviceCodeInfo)}`);
         
         setDeviceInstructions({
           device_code: deviceCodeInfo.device_code || '',
@@ -177,7 +178,7 @@ export default function TwitchIntegration({ onHostAsServer }: TwitchIntegrationP
         clientSecret: null
       });
       
-      console.log('Authentication initiated:', result);
+      logger.info('TwitchIntegration', `Authentication initiated: ${result}`);
       // The authentication will be handled via events, so we just wait
     } catch (error) {
       setError(`Authentication failed: ${error}`);

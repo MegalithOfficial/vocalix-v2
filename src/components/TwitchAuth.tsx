@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { logger } from '../utils/logger';
 
 interface DeviceCodeInstructions {
   device_code: string;
@@ -28,7 +29,7 @@ export function TwitchAuth({ onAuthSuccess, onAuthError, clientId, clientSecret 
     const unlistenDeviceCode = listen('TWITCH_DEVICE_CODE', (event) => {
       try {
         const deviceCodeInfo = event.payload as any;
-        console.log('Received device code info:', deviceCodeInfo);
+        logger.info('TwitchAuth', `Received device code info: ${JSON.stringify(deviceCodeInfo)}`);
         
         setDeviceInstructions({
           device_code: deviceCodeInfo.device_code || '',
