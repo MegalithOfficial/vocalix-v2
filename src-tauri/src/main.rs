@@ -735,14 +735,14 @@ async fn get_twitch_redemptions(
         .await
         .map_err(|e| format!("Failed to get user info: {}", e))?;
 
-    let broadcaster_id = "1228206540"; //  user_info.id;
+    let broadcaster_id = user_info.id; // 1228206540
 
     // Get valid tokens
     let tokens = auth_manager
         .get_valid_tokens()
         .await
         .map_err(|e| format!("Failed to get access token: {}", e))?;
-    let access_token = "kf71d4mqkutm08s62hhcsazpv0kl56"; //tokens.access_token;
+    let access_token = tokens.access_token;
 
     // Get client ID
     let (client_id, _) = TwitchAuthManager::load_client_credentials()
