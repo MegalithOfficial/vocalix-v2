@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { load } from '@tauri-apps/plugin-store';
 import { AudioQuality } from '../utils/audioSettings';
@@ -25,6 +25,7 @@ export const useSettingsState = () => {
   const [rvcModelFile, setRvcModelFile] = useState<File | null>(null);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>('');
+  const [availableDevices, setAvailableDevices] = useState<Array<{type: string, name: string, id: string}>>([]);
   const [rvcSettings, setRvcSettings] = useState<RvcSettings>({
     device: 'cuda:0',
     inferenceRate: 0.75,
@@ -270,7 +271,7 @@ export const useSettingsState = () => {
   };
 
   // Load available models
-  const loadAvailableModels = async () => {
+  const loadAvailableModels = useCallback(async () => {
     try {
       const models = await invoke('get_pth_models') as string[];
       setAvailableModels(models);
@@ -278,7 +279,20 @@ export const useSettingsState = () => {
     } catch (error) {
       console.error('Error loading available models:', error);
     }
-  };
+  }, []);
+
+  // Load available devices
+  const loadAvailableDevices = useCallback(async () => {
+    try {
+      const devices = await invoke('get_available_devices') as Array<{type: string, name: string, id: string}>;
+      setAvailableDevices(devices);
+      console.log('Available devices loaded:', devices);
+    } catch (error) {
+      console.error('Error loading available devices:', error);
+      // Fallback to CPU only
+      setAvailableDevices([{type: 'cpu', name: 'CPU', id: 'cpu'}]);
+    }
+  }, []);
 
   // Delete model
   const deleteModel = async (modelName: string) => {
@@ -450,11 +464,14 @@ export const useSettingsState = () => {
     setAvailableModels,
     selectedModel,
     setSelectedModel,
+    availableDevices,
+    setAvailableDevices,
     rvcSettings,
     setRvcSettings,
     saveTtsSettings,
     loadTtsSettings,
     loadAvailableModels,
+    loadAvailableDevices,
     deleteModel,
 
     // Redemptions

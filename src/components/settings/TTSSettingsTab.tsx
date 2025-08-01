@@ -22,11 +22,13 @@ const TTSSettingsTab = ({ settingsState }: TTSSettingsTabProps) => {
     availableModels,
     selectedModel,
     setSelectedModel,
+    availableDevices,
     rvcSettings,
     setRvcSettings,
     saveTtsSettings,
     convertFileToBase64,
     loadAvailableModels,
+    loadAvailableDevices,
   } = settingsState;
 
   // Handle RVC model file upload
@@ -61,14 +63,20 @@ const TTSSettingsTab = ({ settingsState }: TTSSettingsTabProps) => {
     event.target.value = '';
   };
 
-  // Load available models when component mounts or RVC mode is selected
+  // Load available models and devices when RVC mode is selected
   useEffect(() => {
     if (ttsMode === 'rvc') {
+      // Load models
       loadAvailableModels().catch(error => {
         console.error('Error loading available models:', error);
       });
+      
+      // Load devices immediately when RVC mode is selected
+      loadAvailableDevices().catch(error => {
+        console.error('Error loading available devices:', error);
+      });
     }
-  }, [ttsMode, loadAvailableModels]);
+  }, [ttsMode]); // Only depend on ttsMode to prevent infinite loops
 
   // Sync rvcModelFile when selectedModel changes
   useEffect(() => {
@@ -307,10 +315,15 @@ const TTSSettingsTab = ({ settingsState }: TTSSettingsTabProps) => {
                       onChange={(e) => updateRvcSetting('device', e.target.value)}
                       className="w-full px-4 py-3 bg-gray-700/50 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-orange-500"
                     >
-                      <option value="cuda:0">CUDA GPU (cuda:0)</option>
-                      <option value="cpu">CPU</option>
-                      <option value="cuda:1">CUDA GPU 1 (cuda:1)</option>
-                      <option value="cuda:2">CUDA GPU 2 (cuda:2)</option>
+                      {availableDevices.length > 0 ? ( 
+                        availableDevices.map((device) => (
+                          <option key={device.id} value={device.id}>
+                            {device.name} ({device.type})
+                          </option>
+                        ))
+                      ) : (
+                        <option value="cpu">CPU</option>
+                      )}
                     </select>
                   </div>
 

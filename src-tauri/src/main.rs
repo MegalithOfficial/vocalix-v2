@@ -9,12 +9,15 @@ mod pairing;
 mod twitch;
 mod twitch_oauth;
 
+use chrono::{DateTime, Utc};
 use p256::ecdh::EphemeralSecret;
 use pairing::AppState;
 use ring::aead;
 use serde::{Deserialize, Serialize};
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::sync::Arc;
-use tauri::{Emitter, State, Window, AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager, State, Window};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, mpsc, Mutex};
@@ -22,9 +25,6 @@ use twitch::{
     create_common_subscriptions, parse_channel_points_redemption, EventSubEvent, TwitchEventSub,
 };
 use twitch_oauth::TwitchAuthManager;
-use std::fs::OpenOptions;
-use std::io::Write;
-use chrono::{DateTime, Utc};
 
 // --- Logging Macros (defined early for use throughout) ---
 // Logging macro for internal use
@@ -33,7 +33,7 @@ macro_rules! app_log {
         {
             let message = format!($($arg)*);
             let timestamp = chrono::Utc::now().to_rfc3339();
-            
+
             // Print to console
             match $level {
                 "debug" => println!("[{}] [DEBUG] [{}] {}", timestamp, $component, message),
@@ -42,7 +42,7 @@ macro_rules! app_log {
                 "error" => eprintln!("[{}] [ERROR] [{}] {}", timestamp, $component, message),
                 _ => println!("[{}] [{}] [{}] {}", timestamp, $level.to_uppercase(), $component, message),
             }
-            
+
             // Write to file asynchronously (best effort)
             // Note: The log file path will be updated in setup() to use app data directory
             let log_file_path = "logs/vocalix.log".to_string();
@@ -53,17 +53,17 @@ macro_rules! app_log {
                 $component,
                 message
             );
-            
+
             std::thread::spawn(move || {
                 use std::fs::{create_dir_all, OpenOptions};
                 use std::io::Write;
                 use std::path::Path;
-                
+
                 // Create logs directory if it doesn't exist
                 if let Some(parent) = Path::new(&log_file_path).parent() {
                     let _ = create_dir_all(parent);
                 }
-                
+
                 if let Ok(mut file) = OpenOptions::new()
                     .create(true)
                     .append(true)
@@ -382,8 +382,12 @@ async fn twitch_authenticate(
     window: Window,
     twitch_state: State<'_, TwitchState>,
 ) -> Result<String, String> {
-    log_info!("TwitchAuth", "Starting Twitch authentication with client_id: {}", &client_id[..8.min(client_id.len())]);
-    
+    log_info!(
+        "TwitchAuth",
+        "Starting Twitch authentication with client_id: {}",
+        &client_id[..8.min(client_id.len())]
+    );
+
     window
         .emit(
             "STATUS_UPDATE",
@@ -719,7 +723,7 @@ async fn get_twitch_redemptions(
     twitch_state: State<'_, TwitchState>,
 ) -> Result<Vec<TwitchRedemption>, String> {
     log_info!("TwitchAPI", "Fetching Twitch redemptions");
-    
+
     // Get the auth manager
     let auth_manager = {
         let auth_guard = twitch_state.auth_manager.lock().await;
@@ -823,29 +827,37 @@ async fn save_audio_file(
     file_name: String,
     base64_data: String,
 ) -> Result<(), String> {
-    log_info!("AudioManager", "Saving audio file: {} for redemption: {}", file_name, redemption_name);
-    
+    log_info!(
+        "AudioManager",
+        "Saving audio file: {} for redemption: {}",
+        file_name,
+        redemption_name
+    );
+
+    use base64::{engine::general_purpose, Engine as _};
     use std::fs;
-    use base64::{Engine as _, engine::general_purpose};
-    
+
     // Get app data directory
-    let app_data_dir = app.path().app_data_dir()
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
         .map_err(|e| format!("Failed to get app data directory: {}", e))?;
-    
+
     // Create the directory structure: static_audios/<redemption_name>/
     let dir_path = app_data_dir.join("static_audios").join(&redemption_name);
     fs::create_dir_all(&dir_path)
         .map_err(|e| format!("Failed to create directory {:?}: {}", dir_path, e))?;
-    
+
     // Decode base64 data
-    let audio_data = general_purpose::STANDARD.decode(&base64_data)
+    let audio_data = general_purpose::STANDARD
+        .decode(&base64_data)
         .map_err(|e| format!("Failed to decode base64 data: {}", e))?;
-    
+
     // Write the file
     let file_path = dir_path.join(&file_name);
     fs::write(&file_path, audio_data)
         .map_err(|e| format!("Failed to write file {:?}: {}", file_path, e))?;
-    
+
     log_info!("AudioManager", "Saved audio file: {:?}", file_path);
     Ok(())
 }
@@ -853,27 +865,29 @@ async fn save_audio_file(
 #[tauri::command]
 async fn get_audio_files(app: AppHandle, redemption_name: String) -> Result<Vec<String>, String> {
     use std::fs;
-    
+
     // Get app data directory
-    let app_data_dir = app.path().app_data_dir()
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
         .map_err(|e| format!("Failed to get app data directory: {}", e))?;
-    
+
     let dir_path = app_data_dir.join("static_audios").join(&redemption_name);
-    
+
     // Check if directory exists
     if !dir_path.exists() {
         return Ok(Vec::new());
     }
-    
+
     // Read directory contents
     let entries = fs::read_dir(&dir_path)
         .map_err(|e| format!("Failed to read directory {:?}: {}", dir_path, e))?;
-    
+
     let mut files = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
         let path = entry.path();
-        
+
         if path.is_file() {
             if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
                 // Only include .mp3 files
@@ -883,7 +897,7 @@ async fn get_audio_files(app: AppHandle, redemption_name: String) -> Result<Vec<
             }
         }
     }
-    
+
     // Sort files for consistent ordering
     files.sort();
     Ok(files)
@@ -893,24 +907,26 @@ async fn get_audio_files(app: AppHandle, redemption_name: String) -> Result<Vec<
 #[tauri::command]
 async fn save_tts_settings(app: AppHandle, config: serde_json::Value) -> Result<(), String> {
     use std::fs;
-    
+
     // Get app data directory
-    let app_data_dir = app.path().app_data_dir()
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
         .map_err(|e| format!("Failed to get app data directory: {}", e))?;
-    
+
     // Create app data directory if it doesn't exist
     fs::create_dir_all(&app_data_dir)
         .map_err(|e| format!("Failed to create app data directory: {}", e))?;
-    
+
     // Create the full path for texttospeech.json
     let config_path = app_data_dir.join("texttospeech.json");
-    
+
     let config_str = serde_json::to_string_pretty(&config)
         .map_err(|e| format!("Failed to serialize config: {}", e))?;
-    
+
     fs::write(&config_path, config_str)
         .map_err(|e| format!("Failed to write TTS config: {}", e))?;
-    
+
     log_info!("TTSSettings", "TTS settings saved to {:?}", config_path);
     Ok(())
 }
@@ -918,13 +934,15 @@ async fn save_tts_settings(app: AppHandle, config: serde_json::Value) -> Result<
 #[tauri::command]
 async fn load_tts_settings(app: AppHandle) -> Result<serde_json::Value, String> {
     use std::fs;
-    
+
     // Get app data directory
-    let app_data_dir = app.path().app_data_dir()
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
         .map_err(|e| format!("Failed to get app data directory: {}", e))?;
-    
+
     let config_path = app_data_dir.join("texttospeech.json");
-    
+
     match fs::read_to_string(&config_path) {
         Ok(content) => {
             let config: serde_json::Value = serde_json::from_str(&content)
@@ -939,28 +957,34 @@ async fn load_tts_settings(app: AppHandle) -> Result<serde_json::Value, String> 
 }
 
 #[tauri::command]
-async fn save_pth_model(app: AppHandle, file_name: String, base64_data: String) -> Result<(), String> {
-    use std::fs;
+async fn save_pth_model(
+    app: AppHandle,
+    file_name: String,
+    base64_data: String,
+) -> Result<(), String> {
     use base64::{engine::general_purpose::STANDARD as Base64Engine, Engine};
-    
+    use std::fs;
+
     // Get app data directory
-    let app_data_dir = app.path().app_data_dir()
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
         .map_err(|e| format!("Failed to get app data directory: {}", e))?;
-    
+
     // Create pythonenv/models directory if it doesn't exist
     let model_dir = app_data_dir.join("pythonenv").join("models");
     fs::create_dir_all(&model_dir)
         .map_err(|e| format!("Failed to create model directory: {}", e))?;
-    
+
     // Decode base64 data
-    let file_data = Base64Engine.decode(&base64_data)
+    let file_data = Base64Engine
+        .decode(&base64_data)
         .map_err(|e| format!("Failed to decode base64 data: {}", e))?;
-    
+
     // Save file with original name
     let file_path = model_dir.join(&file_name);
-    fs::write(&file_path, file_data)
-        .map_err(|e| format!("Failed to write model file: {}", e))?;
-    
+    fs::write(&file_path, file_data).map_err(|e| format!("Failed to write model file: {}", e))?;
+
     log_info!("ModelManager", "Model file saved: {:?}", file_path);
     Ok(())
 }
@@ -968,27 +992,29 @@ async fn save_pth_model(app: AppHandle, file_name: String, base64_data: String) 
 #[tauri::command]
 async fn get_pth_models(app: AppHandle) -> Result<Vec<String>, String> {
     use std::fs;
-    
+
     // Get app data directory
-    let app_data_dir = app.path().app_data_dir()
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
         .map_err(|e| format!("Failed to get app data directory: {}", e))?;
-    
+
     let model_dir = app_data_dir.join("pythonenv").join("models");
-    
+
     // Check if directory exists
     if !model_dir.exists() {
         return Ok(Vec::new());
     }
-    
+
     // Read directory contents
-    let entries = fs::read_dir(&model_dir)
-        .map_err(|e| format!("Failed to read models directory: {}", e))?;
-    
+    let entries =
+        fs::read_dir(&model_dir).map_err(|e| format!("Failed to read models directory: {}", e))?;
+
     let mut models = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
         let path = entry.path();
-        
+
         if path.is_file() {
             if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
                 // Only include .pth files
@@ -998,7 +1024,7 @@ async fn get_pth_models(app: AppHandle) -> Result<Vec<String>, String> {
             }
         }
     }
-    
+
     // Sort models for consistent ordering
     models.sort();
     Ok(models)
@@ -1007,27 +1033,31 @@ async fn get_pth_models(app: AppHandle) -> Result<Vec<String>, String> {
 #[tauri::command]
 async fn delete_pth_model(app: AppHandle, file_name: String) -> Result<(), String> {
     use std::fs;
-    
+
     // Get app data directory
-    let app_data_dir = app.path().app_data_dir()
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
         .map_err(|e| format!("Failed to get app data directory: {}", e))?;
-    
-    let file_path = app_data_dir.join("pythonenv").join("models").join(&file_name);
-    
+
+    let file_path = app_data_dir
+        .join("pythonenv")
+        .join("models")
+        .join(&file_name);
+
     // Check if file exists
     if !file_path.exists() {
         return Err(format!("Model file does not exist: {}", file_name));
     }
-    
+
     // Check if it's a .pth file for security
     if !file_name.ends_with(".pth") {
         return Err("Only .pth model files can be deleted".to_string());
     }
-    
+
     // Delete the file
-    fs::remove_file(&file_path)
-        .map_err(|e| format!("Failed to delete model file: {}", e))?;
-    
+    fs::remove_file(&file_path).map_err(|e| format!("Failed to delete model file: {}", e))?;
+
     log_info!("ModelManager", "Model file deleted: {:?}", file_path);
     Ok(())
 }
@@ -1035,7 +1065,12 @@ async fn delete_pth_model(app: AppHandle, file_name: String) -> Result<(), Strin
 #[tauri::command]
 async fn test_tts_normal(provider: String, voice: String) -> Result<(), String> {
     // TODO: Implement normal TTS testing
-    log_info!("TTSTest", "Testing Normal TTS - Provider: {}, Voice: {}", provider, voice);
+    log_info!(
+        "TTSTest",
+        "Testing Normal TTS - Provider: {}, Voice: {}",
+        provider,
+        voice
+    );
     Ok(())
 }
 
@@ -1048,56 +1083,82 @@ async fn test_tts_rvc(
     protect_rate: f64,
 ) -> Result<(), String> {
     // TODO: Implement RVC TTS testing
-    log_info!("TTSTest", 
-        "Testing RVC TTS - Device: {}, IR: {}, FR: {}, RMR: {}, PR: {}", 
-        device, inference_rate, filter_radius, resample_rate, protect_rate
+    log_info!(
+        "TTSTest",
+        "Testing RVC TTS - Device: {}, IR: {}, FR: {}, RMR: {}, PR: {}",
+        device,
+        inference_rate,
+        filter_radius,
+        resample_rate,
+        protect_rate
     );
     Ok(())
 }
 
 #[tauri::command]
-async fn setup_python_environment(app: AppHandle, window: Window) -> Result<serde_json::Value, String> {
+async fn setup_python_environment(
+    app: AppHandle,
+    window: Window,
+) -> Result<serde_json::Value, String> {
     use std::fs;
     use std::process::Command;
-    
-    log_info!("PythonEnvironment", "Starting comprehensive Python environment setup...");
-    
+
+    log_info!(
+        "PythonEnvironment",
+        "Starting comprehensive Python environment setup..."
+    );
+
     // Get app data directory
-    let app_data_dir = app.path().app_data_dir()
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
         .map_err(|e| format!("Failed to get app data directory: {}", e))?;
-    
+
     // Step 1: Check if Python is installed and version >= 3.10
-    window.emit("PYTHON_SETUP_PROGRESS", serde_json::json!({
-        "progress": 10,
-        "status": "Checking Python installation and version..."
-    })).unwrap();
-    log_info!("PythonEnvironment", "Step 1: Checking Python installation and version...");
-    
+    window
+        .emit(
+            "PYTHON_SETUP_PROGRESS",
+            serde_json::json!({
+                "progress": 10,
+                "status": "Checking Python installation and version..."
+            }),
+        )
+        .unwrap();
+    log_info!(
+        "PythonEnvironment",
+        "Step 1: Checking Python installation and version..."
+    );
+
     let python_command = if cfg!(windows) { "python" } else { "python3" };
-    
+
     let python_check = Command::new(python_command)
         .arg("--version")
         .output()
-        .map_err(|e| format!("Python not found. Please install Python 3.10 or higher. Error: {}", e))?;
-    
+        .map_err(|e| {
+            format!(
+                "Python not found. Please install Python 3.10 or higher. Error: {}",
+                e
+            )
+        })?;
+
     if !python_check.status.success() {
         return Err("Python not found. Please install Python 3.10 or higher.".to_string());
     }
-    
+
     let version_output = String::from_utf8_lossy(&python_check.stdout);
-    log_info!("PythonEnvironment", "Found Python: {}", version_output.trim());
-    
-    let version_string = version_output
-        .trim()
-        .replace("Python ", "");
-    let version_parts: Vec<&str> = version_string
-        .split('.')
-        .collect();
-    
+    log_info!(
+        "PythonEnvironment",
+        "Found Python: {}",
+        version_output.trim()
+    );
+
+    let version_string = version_output.trim().replace("Python ", "");
+    let version_parts: Vec<&str> = version_string.split('.').collect();
+
     if version_parts.len() >= 2 {
         let major: i32 = version_parts[0].parse().unwrap_or(0);
         let minor: i32 = version_parts[1].parse().unwrap_or(0);
-        
+
         if major < 3 || (major == 3 && minor < 10) {
             return Err(format!(
                 "Python version {}.{} found, but version 3.10 or higher is required.",
@@ -1105,128 +1166,181 @@ async fn setup_python_environment(app: AppHandle, window: Window) -> Result<serd
             ));
         }
     }
-    
+
     // Step 2: Create pythonenv directory in app data directory
-    window.emit("PYTHON_SETUP_PROGRESS", serde_json::json!({
-        "progress": 25,
-        "status": "Creating pythonenv directory..."
-    })).unwrap();
-    log_info!("PythonEnvironment", "Step 2: Creating pythonenv directory in app data...");
-    
+    window
+        .emit(
+            "PYTHON_SETUP_PROGRESS",
+            serde_json::json!({
+                "progress": 25,
+                "status": "Creating pythonenv directory..."
+            }),
+        )
+        .unwrap();
+    log_info!(
+        "PythonEnvironment",
+        "Step 2: Creating pythonenv directory in app data..."
+    );
+
     let pythonenv_dir = app_data_dir.join("pythonenv");
     fs::create_dir_all(&pythonenv_dir)
         .map_err(|e| format!("Failed to create pythonenv directory: {}", e))?;
-    
+
     // Step 3: Create virtual environment
-    window.emit("PYTHON_SETUP_PROGRESS", serde_json::json!({
-        "progress": 40,
-        "status": "Creating Python virtual environment..."
-    })).unwrap();
-    log_info!("PythonEnvironment", "Step 3: Creating Python virtual environment...");
-    
+    window
+        .emit(
+            "PYTHON_SETUP_PROGRESS",
+            serde_json::json!({
+                "progress": 40,
+                "status": "Creating Python virtual environment..."
+            }),
+        )
+        .unwrap();
+    log_info!(
+        "PythonEnvironment",
+        "Step 3: Creating Python virtual environment..."
+    );
+
     let venv_creation = Command::new(python_command)
         .args(["-m", "venv", pythonenv_dir.to_str().unwrap()])
         .output()
         .map_err(|e| format!("Failed to create virtual environment: {}", e))?;
-    
+
     if !venv_creation.status.success() {
         let error_output = String::from_utf8_lossy(&venv_creation.stderr);
-        return Err(format!("Failed to create virtual environment: {}", error_output));
+        return Err(format!(
+            "Failed to create virtual environment: {}",
+            error_output
+        ));
     }
-    
+
     // Step 4: Determine pip path based on OS
     let pip_path = if cfg!(windows) {
         pythonenv_dir.join("Scripts").join("pip.exe")
     } else {
         pythonenv_dir.join("bin").join("pip")
     };
-    
+
     // Step 4: Install edge-tts
-    window.emit("PYTHON_SETUP_PROGRESS", serde_json::json!({
-        "progress": 60,
-        "status": "Installing edge-tts package..."
-    })).unwrap();
+    window
+        .emit(
+            "PYTHON_SETUP_PROGRESS",
+            serde_json::json!({
+                "progress": 60,
+                "status": "Installing edge-tts package..."
+            }),
+        )
+        .unwrap();
     log_info!("PythonEnvironment", "Step 4: Installing edge-tts...");
-    
+
     let edge_tts_install = Command::new(&pip_path)
         .args(["install", "edge-tts"])
         .output()
         .map_err(|e| format!("Failed to install edge-tts: {}", e))?;
-    
+
     if !edge_tts_install.status.success() {
         let error_output = String::from_utf8_lossy(&edge_tts_install.stderr);
         return Err(format!("Failed to install edge-tts: {}", error_output));
     }
-    
+
     // Step 5: Install PyTorch with CUDA 118 support
-    window.emit("PYTHON_SETUP_PROGRESS", serde_json::json!({
-        "progress": 70,
-        "status": "Installing PyTorch with CUDA 118 support..."
-    })).unwrap();
-    log_info!("PythonEnvironment", "Step 5: Installing PyTorch with CUDA 118...");
-    
+    window
+        .emit(
+            "PYTHON_SETUP_PROGRESS",
+            serde_json::json!({
+                "progress": 70,
+                "status": "Installing PyTorch with CUDA 118 support..."
+            }),
+        )
+        .unwrap();
+    log_info!(
+        "PythonEnvironment",
+        "Step 5: Installing PyTorch with CUDA 118..."
+    );
+
     // Install torch with specific version and CUDA support
     let torch_install = Command::new(&pip_path)
         .args([
-            "install", 
-            "torch==2.1.1+cu118", 
-            "--index-url", 
-            "https://download.pytorch.org/whl/cu118"
+            "install",
+            "torch==2.1.1+cu118",
+            "--index-url",
+            "https://download.pytorch.org/whl/cu118",
         ])
         .output()
         .map_err(|e| format!("Failed to install torch: {}", e))?;
-    
+
     if !torch_install.status.success() {
         let error_output = String::from_utf8_lossy(&torch_install.stderr);
         return Err(format!("Failed to install torch: {}", error_output));
     }
-    
+
     // Step 6: Install torchaudio with CUDA 118 support
-    window.emit("PYTHON_SETUP_PROGRESS", serde_json::json!({
-        "progress": 80,
-        "status": "Installing torchaudio with CUDA 118 support..."
-    })).unwrap();
-    log_info!("PythonEnvironment", "Step 6: Installing torchaudio with CUDA 118...");
-    
+    window
+        .emit(
+            "PYTHON_SETUP_PROGRESS",
+            serde_json::json!({
+                "progress": 80,
+                "status": "Installing torchaudio with CUDA 118 support..."
+            }),
+        )
+        .unwrap();
+    log_info!(
+        "PythonEnvironment",
+        "Step 6: Installing torchaudio with CUDA 118..."
+    );
+
     let torchaudio_install = Command::new(&pip_path)
         .args([
-            "install", 
-            "torchaudio==2.1.1+cu118", 
-            "--index-url", 
-            "https://download.pytorch.org/whl/cu118"
+            "install",
+            "torchaudio==2.1.1+cu118",
+            "--index-url",
+            "https://download.pytorch.org/whl/cu118",
         ])
         .output()
         .map_err(|e| format!("Failed to install torchaudio: {}", e))?;
-    
+
     if !torchaudio_install.status.success() {
         let error_output = String::from_utf8_lossy(&torchaudio_install.stderr);
         return Err(format!("Failed to install torchaudio: {}", error_output));
     }
-    
+
     // Step 7: Install rvc-python
-    window.emit("PYTHON_SETUP_PROGRESS", serde_json::json!({
-        "progress": 90,
-        "status": "Installing rvc-python package..."
-    })).unwrap();
+    window
+        .emit(
+            "PYTHON_SETUP_PROGRESS",
+            serde_json::json!({
+                "progress": 90,
+                "status": "Installing rvc-python package..."
+            }),
+        )
+        .unwrap();
     log_info!("PythonEnvironment", "Step 7: Installing rvc-python...");
-    
+
     let rvc_python_install = Command::new(&pip_path)
         .args(["install", "rvc-python"])
         .output()
         .map_err(|e| format!("Failed to install rvc-python: {}", e))?;
-    
+
     if !rvc_python_install.status.success() {
         let error_output = String::from_utf8_lossy(&rvc_python_install.stderr);
         return Err(format!("Failed to install rvc-python: {}", error_output));
     }
-    
+
     // Final step: Complete
-    window.emit("PYTHON_SETUP_PROGRESS", serde_json::json!({
-        "progress": 100,
-        "status": "Environment setup completed successfully!"
-    })).unwrap();
-    log_info!("PythonEnvironment", "Python environment setup completed successfully!");
-    
+    window
+        .emit(
+            "PYTHON_SETUP_PROGRESS",
+            serde_json::json!({
+                "progress": 100,
+                "status": "Environment setup completed successfully!"
+            }),
+        )
+        .unwrap();
+    log_info!(
+        "PythonEnvironment",
+        "Python environment setup completed successfully!"
+    );
+
     // Return success status with installed packages
     Ok(serde_json::json!({
         "success": true,
@@ -1241,17 +1355,19 @@ async fn setup_python_environment(app: AppHandle, window: Window) -> Result<serd
 async fn check_environment_status(app: AppHandle) -> Result<serde_json::Value, String> {
     use std::path::Path;
     use std::process::Command;
-    
+
     log_info!("PythonEnvironment", "Checking environment status...");
-    
+
     // Get app data directory
-    let app_data_dir = app.path().app_data_dir()
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
         .map_err(|e| format!("Failed to get app data directory: {}", e))?;
-    
+
     // Check if virtual environment exists in app data directory
     let pythonenv_path = app_data_dir.join("pythonenv");
     let env_exists = pythonenv_path.exists();
-    
+
     if !env_exists {
         return Ok(serde_json::json!({
             "environment_ready": false,
@@ -1260,14 +1376,14 @@ async fn check_environment_status(app: AppHandle) -> Result<serde_json::Value, S
             "message": "Virtual environment not found"
         }));
     }
-    
+
     // Check Python version
     let python_path = if cfg!(windows) {
         pythonenv_path.join("Scripts").join("python.exe")
     } else {
         pythonenv_path.join("bin").join("python")
     };
-    
+
     let python_version = match Command::new(&python_path).arg("--version").output() {
         Ok(output) => {
             if output.status.success() {
@@ -1279,15 +1395,15 @@ async fn check_environment_status(app: AppHandle) -> Result<serde_json::Value, S
         }
         Err(_) => None,
     };
-    
+
     // Check library versions
     let library_versions = get_library_versions_internal_with_path(&pythonenv_path).await;
-    
+
     // Check if environment is truly ready - need all required libraries installed
     let environment_ready = if python_version.is_some() && library_versions.is_ok() {
         let libs = library_versions.as_ref().unwrap();
         let required_libs = ["rvc-python", "edge-tts", "torch", "torchaudio"];
-        
+
         required_libs.iter().all(|&lib| {
             if let Some(version) = libs.get(lib).and_then(|v| v.as_str()) {
                 version != "not installed"
@@ -1298,10 +1414,15 @@ async fn check_environment_status(app: AppHandle) -> Result<serde_json::Value, S
     } else {
         false
     };
-    
-    log_info!("PythonEnvironment", "Environment check - Ready: {}, Python: {}, Libraries: {:?}", 
-        environment_ready, python_version.is_some(), library_versions.is_ok());
-    
+
+    log_info!(
+        "PythonEnvironment",
+        "Environment check - Ready: {}, Python: {}, Libraries: {:?}",
+        environment_ready,
+        python_version.is_some(),
+        library_versions.is_ok()
+    );
+
     // Generate informative message
     let message = if environment_ready {
         "Environment is ready".to_string()
@@ -1312,7 +1433,8 @@ async fn check_environment_status(app: AppHandle) -> Result<serde_json::Value, S
     } else {
         let libs = library_versions.as_ref().unwrap();
         let required_libs = ["rvc-python", "edge-tts", "torch", "torchaudio"];
-        let missing_libs: Vec<&str> = required_libs.iter()
+        let missing_libs: Vec<&str> = required_libs
+            .iter()
             .filter(|&&lib| {
                 if let Some(version) = libs.get(lib).and_then(|v| v.as_str()) {
                     version == "not installed"
@@ -1322,14 +1444,14 @@ async fn check_environment_status(app: AppHandle) -> Result<serde_json::Value, S
             })
             .copied()
             .collect();
-        
+
         if missing_libs.is_empty() {
             "Environment needs setup".to_string()
         } else {
             format!("Missing libraries: {}", missing_libs.join(", "))
         }
     };
-    
+
     Ok(serde_json::json!({
         "environment_ready": environment_ready,
         "python_version": python_version,
@@ -1338,10 +1460,12 @@ async fn check_environment_status(app: AppHandle) -> Result<serde_json::Value, S
     }))
 }
 
-async fn get_library_versions_internal_with_path(pythonenv_path: &std::path::Path) -> Result<serde_json::Value, String> {
-    use std::process::Command;
+async fn get_library_versions_internal_with_path(
+    pythonenv_path: &std::path::Path,
+) -> Result<serde_json::Value, String> {
     use std::fs;
-    
+    use std::process::Command;
+
     // Check Python version
     let python_path = if cfg!(windows) {
         pythonenv_path.join("Scripts").join("python.exe")
@@ -1384,7 +1508,7 @@ print(json.dumps({"rvc-python":v("rvc-python","rvc"),"edge-tts":v("edge-tts","ed
         let output_str = String::from_utf8_lossy(&output.stdout);
         match serde_json::from_str::<serde_json::Value>(&output_str) {
             Ok(json_value) => Ok(json_value),
-            Err(e) => Err(format!("Failed to parse JSON output: {}", e))
+            Err(e) => Err(format!("Failed to parse JSON output: {}", e)),
         }
     } else {
         let error_output = String::from_utf8_lossy(&output.stderr);
@@ -1393,16 +1517,16 @@ print(json.dumps({"rvc-python":v("rvc-python","rvc"),"edge-tts":v("edge-tts","ed
 }
 
 async fn get_library_versions_internal() -> Result<serde_json::Value, String> {
-    use std::process::Command;
     use std::fs;
-    
+    use std::process::Command;
+
     // Get the AppData directory
     let data_dir = match dirs::data_dir() {
         Some(dir) => dir,
         None => return Err("Could not determine data directory".to_string()),
     };
     let pythonenv_path = data_dir.join("vocalix-v2").join("pythonenv");
-    
+
     let python_path = if cfg!(windows) {
         pythonenv_path.join("Scripts").join("python.exe")
     } else {
@@ -1444,7 +1568,7 @@ print(json.dumps({"rvc-python":v("rvc-python","rvc"),"edge-tts":v("edge-tts","ed
         let output_str = String::from_utf8_lossy(&output.stdout);
         match serde_json::from_str::<serde_json::Value>(&output_str) {
             Ok(json_value) => Ok(json_value),
-            Err(e) => Err(format!("Failed to parse JSON output: {}", e))
+            Err(e) => Err(format!("Failed to parse JSON output: {}", e)),
         }
     } else {
         let error_output = String::from_utf8_lossy(&output.stderr);
@@ -1455,15 +1579,17 @@ print(json.dumps({"rvc-python":v("rvc-python","rvc"),"edge-tts":v("edge-tts","ed
 #[tauri::command]
 async fn check_python_version(app: AppHandle) -> Result<String, String> {
     use std::process::Command;
-    
+
     log_info!("PythonEnvironment", "Checking Python version...");
-    
+
     let python_command = if cfg!(windows) { "python" } else { "python3" };
-    
+
     // Get app data directory
-    let app_data_dir = app.path().app_data_dir()
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
         .map_err(|e| format!("Failed to get app data directory: {}", e))?;
-    
+
     // First try using the virtual environment if it exists in app data
     let pythonenv_path = app_data_dir.join("pythonenv");
     let python_path = if pythonenv_path.exists() {
@@ -1476,36 +1602,36 @@ async fn check_python_version(app: AppHandle) -> Result<String, String> {
         // Fall back to system Python
         std::path::PathBuf::from(python_command)
     };
-    
+
     // Execute python --version
-    let version_check = Command::new(&python_path)
-        .arg("--version")
-        .output();
-    
+    let version_check = Command::new(&python_path).arg("--version").output();
+
     match version_check {
         Ok(output) => {
             if output.status.success() {
                 let version_output = String::from_utf8_lossy(&output.stdout);
                 let version_str = version_output.trim();
                 log_info!("PythonVersion", "Found Python: {}", version_str);
-                
+
                 // Add environment info
-                let env_info = if pythonenv_path.exists() && python_path.starts_with(&pythonenv_path) {
-                    " (Virtual Environment)"
-                } else {
-                    " (System)"
-                };
-                
+                let env_info =
+                    if pythonenv_path.exists() && python_path.starts_with(&pythonenv_path) {
+                        " (Virtual Environment)"
+                    } else {
+                        " (System)"
+                    };
+
                 Ok(format!("{}{}", version_str, env_info))
             } else {
                 // Try system Python if virtual environment failed
                 if pythonenv_path.exists() && python_path.starts_with(&pythonenv_path) {
-                    log_info!("PythonVersion", "Virtual environment Python failed, trying system Python...");
-                    
-                    let system_check = Command::new(python_command)
-                        .arg("--version")
-                        .output();
-                    
+                    log_info!(
+                        "PythonVersion",
+                        "Virtual environment Python failed, trying system Python..."
+                    );
+
+                    let system_check = Command::new(python_command).arg("--version").output();
+
                     match system_check {
                         Ok(output) => {
                             if output.status.success() {
@@ -1515,7 +1641,7 @@ async fn check_python_version(app: AppHandle) -> Result<String, String> {
                                 Err("Python version check failed".to_string())
                             }
                         }
-                        Err(e) => Err(format!("Failed to execute Python: {}", e))
+                        Err(e) => Err(format!("Failed to execute Python: {}", e)),
                     }
                 } else {
                     let error_output = String::from_utf8_lossy(&output.stderr);
@@ -1526,12 +1652,13 @@ async fn check_python_version(app: AppHandle) -> Result<String, String> {
         Err(e) => {
             // Try system Python if virtual environment failed
             if pythonenv_path.exists() && python_path.starts_with(&pythonenv_path) {
-                log_info!("PythonVersion", "Virtual environment Python failed, trying system Python...");
-                
-                let system_check = Command::new(python_command)
-                    .arg("--version")
-                    .output();
-                
+                log_info!(
+                    "PythonVersion",
+                    "Virtual environment Python failed, trying system Python..."
+                );
+
+                let system_check = Command::new(python_command).arg("--version").output();
+
                 match system_check {
                     Ok(output) => {
                         if output.status.success() {
@@ -1541,7 +1668,7 @@ async fn check_python_version(app: AppHandle) -> Result<String, String> {
                             Err("System Python version check failed".to_string())
                         }
                     }
-                    Err(e) => Err(format!("Python not found: {}", e))
+                    Err(e) => Err(format!("Python not found: {}", e)),
                 }
             } else {
                 Err(format!("Failed to execute Python: {}", e))
@@ -1553,13 +1680,80 @@ async fn check_python_version(app: AppHandle) -> Result<String, String> {
 #[tauri::command]
 async fn check_library_versions(app: AppHandle) -> Result<serde_json::Value, String> {
     log_info!("PythonEnvironment", "Checking library versions...");
-    
+
     // Get app data directory
-    let app_data_dir = app.path().app_data_dir()
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
         .map_err(|e| format!("Failed to get app data directory: {}", e))?;
-    
+
     let pythonenv_path = app_data_dir.join("pythonenv");
     get_library_versions_internal_with_path(&pythonenv_path).await
+}
+
+#[tauri::command]
+async fn get_available_devices(app: AppHandle) -> Result<serde_json::Value, String> {
+    use std::fs;
+    use std::process::Command;
+
+    log_info!("PythonEnvironment", "Getting available devices...");
+
+    // Get app data directory
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data directory: {}", e))?;
+
+    let pythonenv_path = app_data_dir.join("pythonenv");
+    let python_path = if cfg!(windows) {
+        pythonenv_path.join("Scripts").join("python.exe")
+    } else {
+        pythonenv_path.join("bin").join("python")
+    };
+
+    if !python_path.exists() {
+        return Err("Python executable not found in virtual environment".to_string());
+    }
+
+    // Create a temporary Python script to check available devices
+    let script_content = r#"
+try:
+    import torch
+    import json
+    devices = []
+    for i in range(torch.cuda.device_count()):
+        devices.append({'type': 'cuda', 'name': torch.cuda.get_device_name(i)})
+    devices.append({'type': 'cpu', 'name': 'CPU'})
+    print(json.dumps(devices))
+except ImportError:
+    import json
+    print(json.dumps([{'type': 'cpu', 'name': 'CPU'}]))
+"#;
+
+    // Write the script to a temporary file in the pythonenv directory
+    let temp_script = pythonenv_path.join("get_devices_temp.py");
+    fs::write(&temp_script, script_content)
+        .map_err(|e| format!("Failed to write temporary script: {}", e))?;
+
+    // Execute the script
+    let output = Command::new(&python_path)
+        .arg(&temp_script)
+        .output()
+        .map_err(|e| format!("Failed to execute device check script: {}", e))?;
+
+    // Clean up the temporary file
+    let _ = fs::remove_file(&temp_script);
+
+    if output.status.success() {
+        let output_str = String::from_utf8_lossy(&output.stdout);
+        match serde_json::from_str::<serde_json::Value>(&output_str) {
+            Ok(json_value) => Ok(json_value),
+            Err(e) => Err(format!("Failed to parse JSON output: {}", e)),
+        }
+    } else {
+        let error_output = String::from_utf8_lossy(&output.stderr);
+        Err(format!("Script execution failed: {}", error_output))
+    }
 }
 
 #[tauri::command]
@@ -1577,26 +1771,35 @@ async fn download_models() -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn delete_audio_file(app: AppHandle, redemption_name: String, file_name: String) -> Result<(), String> {
+async fn delete_audio_file(
+    app: AppHandle,
+    redemption_name: String,
+    file_name: String,
+) -> Result<(), String> {
     use std::fs;
-    
+
     // Get app data directory
-    let app_data_dir = app.path().app_data_dir()
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
         .map_err(|e| format!("Failed to get app data directory: {}", e))?;
-    
-    let file_path = app_data_dir.join("static_audios").join(&redemption_name).join(&file_name);
-    
+
+    let file_path = app_data_dir
+        .join("static_audios")
+        .join(&redemption_name)
+        .join(&file_name);
+
     // Check if file exists
     if !file_path.exists() {
         return Err(format!("File does not exist: {:?}", file_path));
     }
-    
+
     // Delete the file
     fs::remove_file(&file_path)
         .map_err(|e| format!("Failed to delete file {:?}: {}", file_path, e))?;
-    
+
     log_info!("AudioManager", "Deleted audio file: {:?}", file_path);
-    
+
     // Try to remove directory if it's empty
     let dir_path = app_data_dir.join("static_audios").join(&redemption_name);
     if let Ok(entries) = fs::read_dir(&dir_path) {
@@ -1605,7 +1808,7 @@ async fn delete_audio_file(app: AppHandle, redemption_name: String, file_name: S
             log_info!("AudioManager", "Removed empty directory: {:?}", dir_path);
         }
     }
-    
+
     Ok(())
 }
 
@@ -1616,12 +1819,20 @@ async fn handle_twitch_event(
 ) -> Result<(), Box<dyn std::error::Error>> {
     match event {
         EventSubEvent::SessionWelcome(session) => {
-            log_info!("TwitchEventSub", "WebSocket session established: {}", session.id);
+            log_info!(
+                "TwitchEventSub",
+                "WebSocket session established: {}",
+                session.id
+            );
             window.emit("STATUS_UPDATE", "WebSocket session established")?;
         }
 
         EventSubEvent::SessionReconnect(session) => {
-            log_info!("TwitchEventSub", "Reconnecting to new session: {}", session.id);
+            log_info!(
+                "TwitchEventSub",
+                "Reconnecting to new session: {}",
+                session.id
+            );
             window.emit("STATUS_UPDATE", "Reconnecting to new session...")?;
         }
 
@@ -1630,13 +1841,18 @@ async fn handle_twitch_event(
             event,
             ..
         } => {
-            log_info!("TwitchEventSub", "Received notification: {}", subscription_type);
+            log_info!(
+                "TwitchEventSub",
+                "Received notification: {}",
+                subscription_type
+            );
 
             match subscription_type.as_str() {
                 "channel.channel_points_custom_reward_redemption.add" => {
                     match parse_channel_points_redemption(&event) {
                         Ok(redemption) => {
-                            log_info!("TwitchEventSub", 
+                            log_info!(
+                                "TwitchEventSub",
                                 "Channel points redemption: {} redeemed '{}' for {} points",
                                 redemption.user_name,
                                 redemption.reward.title,
@@ -1656,12 +1872,20 @@ async fn handle_twitch_event(
                             window.emit("TWITCH_CHANNEL_POINTS_REDEMPTION", redemption_data)?;
                         }
                         Err(e) => {
-                            log_error!("TwitchEventSub", "Failed to parse channel points redemption: {}", e);
+                            log_error!(
+                                "TwitchEventSub",
+                                "Failed to parse channel points redemption: {}",
+                                e
+                            );
                         }
                     }
                 }
                 _ => {
-                    log_debug!("TwitchEventSub", "Unhandled event type: {}", subscription_type);
+                    log_debug!(
+                        "TwitchEventSub",
+                        "Unhandled event type: {}",
+                        subscription_type
+                    );
                     // Forward other events as generic events
                     let event_data = serde_json::json!({
                         "type": subscription_type,
@@ -1675,7 +1899,11 @@ async fn handle_twitch_event(
         EventSubEvent::Revocation {
             subscription_type, ..
         } => {
-            log_warn!("TwitchEventSub", "Subscription revoked: {}", subscription_type);
+            log_warn!(
+                "TwitchEventSub",
+                "Subscription revoked: {}",
+                subscription_type
+            );
             window.emit(
                 "ERROR",
                 format!("Subscription revoked: {}", subscription_type),
@@ -2288,74 +2516,99 @@ async fn decrypt_message(
 }
 
 #[tauri::command]
-async fn force_reinstall_libraries(app: AppHandle, window: tauri::Window) -> Result<String, String> {
+async fn force_reinstall_libraries(
+    app: AppHandle,
+    window: tauri::Window,
+) -> Result<String, String> {
     use std::process::Command;
-    
-    log_info!("PythonEnvironment", "Force reinstalling Python libraries...");
-    
+
+    log_info!(
+        "PythonEnvironment",
+        "Force reinstalling Python libraries..."
+    );
+
     // Get app data directory
-    let app_data_dir = app.path().app_data_dir()
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
         .map_err(|e| format!("Failed to get app data directory: {}", e))?;
-    
+
     let pythonenv_path = app_data_dir.join("pythonenv");
-    
+
     if !pythonenv_path.exists() {
-        return Err("Virtual environment not found. Please set up the environment first.".to_string());
+        return Err(
+            "Virtual environment not found. Please set up the environment first.".to_string(),
+        );
     }
-    
+
     // Determine pip path
     let pip_path = if cfg!(windows) {
         pythonenv_path.join("Scripts").join("pip.exe")
     } else {
         pythonenv_path.join("bin").join("pip")
     };
-    
+
     // Emit progress updates
-    let _ = window.emit("PYTHON_SETUP_PROGRESS", serde_json::json!({
-        "progress": 10,
-        "status": "Uninstalling existing packages..."
-    }));
-    
+    let _ = window.emit(
+        "PYTHON_SETUP_PROGRESS",
+        serde_json::json!({
+            "progress": 10,
+            "status": "Uninstalling existing packages..."
+        }),
+    );
+
     // Uninstall existing packages
     let packages = ["edge-tts", "rvc-python"];
     for (i, package) in packages.iter().enumerate() {
         let progress = 10 + (i as i32 * 20);
-        let _ = window.emit("PYTHON_SETUP_PROGRESS", serde_json::json!({
-            "progress": progress,
-            "status": format!("Uninstalling {}...", package)
-        }));
-        
+        let _ = window.emit(
+            "PYTHON_SETUP_PROGRESS",
+            serde_json::json!({
+                "progress": progress,
+                "status": format!("Uninstalling {}...", package)
+            }),
+        );
+
         let uninstall_result = Command::new(&pip_path)
             .args(["uninstall", package, "-y"])
             .output();
-            
+
         if let Err(e) = uninstall_result {
-            log_warn!("PythonEnvironment", "Failed to uninstall {}: {}", package, e);
+            log_warn!(
+                "PythonEnvironment",
+                "Failed to uninstall {}: {}",
+                package,
+                e
+            );
         }
     }
-    
+
     // Clear pip cache
-    let _ = window.emit("PYTHON_SETUP_PROGRESS", serde_json::json!({
-        "progress": 50,
-        "status": "Clearing pip cache..."
-    }));
-    
-    let _ = Command::new(&pip_path)
-        .args(["cache", "purge"])
-        .output();
-    
+    let _ = window.emit(
+        "PYTHON_SETUP_PROGRESS",
+        serde_json::json!({
+            "progress": 50,
+            "status": "Clearing pip cache..."
+        }),
+    );
+
+    let _ = Command::new(&pip_path).args(["cache", "purge"]).output();
+
     // Reinstall packages
     for (i, package) in packages.iter().enumerate() {
         let progress = 60 + (i as i32 * 20);
-        let _ = window.emit("PYTHON_SETUP_PROGRESS", serde_json::json!({
-            "progress": progress,
-            "status": format!("Installing {}...", package)
-        }));
-        
+        let _ = window.emit(
+            "PYTHON_SETUP_PROGRESS",
+            serde_json::json!({
+                "progress": progress,
+                "status": format!("Installing {}...", package)
+            }),
+        );
+
         let install_result = Command::new(&pip_path)
             .args(["install", "--force-reinstall", "--no-cache-dir", package])
             .output();
-            
+
         match install_result {
             Ok(output) => {
                 if !output.status.success() {
@@ -2364,16 +2617,22 @@ async fn force_reinstall_libraries(app: AppHandle, window: tauri::Window) -> Res
                 }
             }
             Err(e) => {
-                return Err(format!("Failed to execute pip install for {}: {}", package, e));
+                return Err(format!(
+                    "Failed to execute pip install for {}: {}",
+                    package, e
+                ));
             }
         }
     }
-    
-    let _ = window.emit("PYTHON_SETUP_PROGRESS", serde_json::json!({
-        "progress": 100,
-        "status": "Force reinstall completed successfully!"
-    }));
-    
+
+    let _ = window.emit(
+        "PYTHON_SETUP_PROGRESS",
+        serde_json::json!({
+            "progress": 100,
+            "status": "Force reinstall completed successfully!"
+        }),
+    );
+
     Ok("Libraries force-reinstalled successfully".to_string())
 }
 
@@ -2381,69 +2640,81 @@ async fn force_reinstall_libraries(app: AppHandle, window: tauri::Window) -> Res
 async fn reset_python_environment(app: AppHandle, window: tauri::Window) -> Result<String, String> {
     use std::fs;
     use std::process::Command;
-    
+
     log_info!("PythonEnvironment", "Resetting Python environment...");
-    
-    let app_data_dir = app.path().app_data_dir()
+
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
         .map_err(|e| format!("Failed to get app data directory: {}", e))?;
-    
+
     let pythonenv_path = app_data_dir.join("pythonenv");
-    
-    let _ = window.emit("PYTHON_SETUP_PROGRESS", serde_json::json!({
-        "progress": 10,
-        "status": "Removing existing virtual environment..."
-    }));
-    
+
+    let _ = window.emit(
+        "PYTHON_SETUP_PROGRESS",
+        serde_json::json!({
+            "progress": 10,
+            "status": "Removing existing virtual environment..."
+        }),
+    );
+
     // Remove existing virtual environment
     if pythonenv_path.exists() {
         if let Err(e) = fs::remove_dir_all(&pythonenv_path) {
             return Err(format!("Failed to remove existing environment: {}", e));
         }
     }
-    
-    let _ = window.emit("PYTHON_SETUP_PROGRESS", serde_json::json!({
-        "progress": 30,
-        "status": "Creating fresh virtual environment..."
-    }));
-    
+
+    let _ = window.emit(
+        "PYTHON_SETUP_PROGRESS",
+        serde_json::json!({
+            "progress": 30,
+            "status": "Creating fresh virtual environment..."
+        }),
+    );
+
     // Create fresh virtual environment
     let python_command = if cfg!(windows) { "python" } else { "python3" };
     let venv_result = Command::new(python_command)
         .args(["-m", "venv", pythonenv_path.to_str().unwrap()])
         .output();
-    
+
     match venv_result {
         Ok(output) => {
             if !output.status.success() {
                 let error_output = String::from_utf8_lossy(&output.stderr);
-                return Err(format!("Failed to create virtual environment: {}", error_output));
+                return Err(format!(
+                    "Failed to create virtual environment: {}",
+                    error_output
+                ));
             }
         }
         Err(e) => {
             return Err(format!("Failed to execute venv command: {}", e));
         }
     }
-    
+
     // Set up pip path for package installation
     let pip_path = if cfg!(windows) {
         pythonenv_path.join("Scripts").join("pip.exe")
     } else {
         pythonenv_path.join("bin").join("pip")
     };
-    
+
     // Install required packages
     let packages = ["edge-tts", "rvc-python"];
     for (i, package) in packages.iter().enumerate() {
         let progress = 60 + (i as i32 * 20);
-        let _ = window.emit("PYTHON_SETUP_PROGRESS", serde_json::json!({
-            "progress": progress,
-            "status": format!("Installing {}...", package)
-        }));
-        
-        let install_result = Command::new(&pip_path)
-            .args(["install", package])
-            .output();
-            
+        let _ = window.emit(
+            "PYTHON_SETUP_PROGRESS",
+            serde_json::json!({
+                "progress": progress,
+                "status": format!("Installing {}...", package)
+            }),
+        );
+
+        let install_result = Command::new(&pip_path).args(["install", package]).output();
+
         match install_result {
             Ok(output) => {
                 if !output.status.success() {
@@ -2452,16 +2723,22 @@ async fn reset_python_environment(app: AppHandle, window: tauri::Window) -> Resu
                 }
             }
             Err(e) => {
-                return Err(format!("Failed to execute pip install for {}: {}", package, e));
+                return Err(format!(
+                    "Failed to execute pip install for {}: {}",
+                    package, e
+                ));
             }
         }
     }
-    
-    let _ = window.emit("PYTHON_SETUP_PROGRESS", serde_json::json!({
-        "progress": 100,
-        "status": "Environment reset completed successfully!"
-    }));
-    
+
+    let _ = window.emit(
+        "PYTHON_SETUP_PROGRESS",
+        serde_json::json!({
+            "progress": 100,
+            "status": "Environment reset completed successfully!"
+        }),
+    );
+
     Ok("Python environment reset successfully".to_string())
 }
 
@@ -2477,17 +2754,19 @@ async fn write_log(
 ) -> Result<(), String> {
     use std::fs::OpenOptions;
     use std::io::Write;
-    
+
     let log_entry = LogEntry {
         timestamp,
         level,
         component,
         message,
     };
-    
-    let log_file_path = logging_state.log_file_path.lock()
+
+    let log_file_path = logging_state
+        .log_file_path
+        .lock()
         .map_err(|e| format!("Failed to lock log file path: {}", e))?;
-    
+
     // Create log line
     let log_line = format!(
         "[{}] [{}] [{}] {}\n",
@@ -2496,7 +2775,7 @@ async fn write_log(
         log_entry.component,
         log_entry.message
     );
-    
+
     // Write to file
     match OpenOptions::new()
         .create(true)
@@ -2517,25 +2796,25 @@ async fn write_log(
             return Err(format!("Failed to open log file: {}", e));
         }
     }
-    
+
     Ok(())
 }
 
 #[tauri::command]
-async fn get_logs(
-    logging_state: State<'_, LoggingState>,
-) -> Result<Vec<LogEntry>, String> {
+async fn get_logs(logging_state: State<'_, LoggingState>) -> Result<Vec<LogEntry>, String> {
     use std::fs;
     use std::io::{BufRead, BufReader};
-    
-    let log_file_path = logging_state.log_file_path.lock()
+
+    let log_file_path = logging_state
+        .log_file_path
+        .lock()
         .map_err(|e| format!("Failed to lock log file path: {}", e))?;
-    
+
     match fs::File::open(&*log_file_path) {
         Ok(file) => {
             let reader = BufReader::new(file);
             let mut logs = Vec::new();
-            
+
             for line in reader.lines() {
                 if let Ok(line) = line {
                     if let Some(log_entry) = parse_log_line(&line) {
@@ -2543,13 +2822,13 @@ async fn get_logs(
                     }
                 }
             }
-            
+
             // Return the last 1000 entries
             if logs.len() > 1000 {
                 let start = logs.len() - 1000;
                 logs.drain(0..start);
             }
-            
+
             Ok(logs)
         }
         Err(_) => {
@@ -2560,17 +2839,17 @@ async fn get_logs(
 }
 
 #[tauri::command]
-async fn clear_logs(
-    logging_state: State<'_, LoggingState>,
-) -> Result<(), String> {
+async fn clear_logs(logging_state: State<'_, LoggingState>) -> Result<(), String> {
     use std::fs;
-    
-    let log_file_path = logging_state.log_file_path.lock()
+
+    let log_file_path = logging_state
+        .log_file_path
+        .lock()
         .map_err(|e| format!("Failed to lock log file path: {}", e))?;
-    
+
     match fs::write(&*log_file_path, "") {
         Ok(_) => Ok(()),
-        Err(e) => Err(format!("Failed to clear log file: {}", e))
+        Err(e) => Err(format!("Failed to clear log file: {}", e)),
     }
 }
 
@@ -2580,17 +2859,17 @@ fn parse_log_line(line: &str) -> Option<LogEntry> {
     if line.len() < 10 || !line.starts_with('[') {
         return None;
     }
-    
+
     let parts: Vec<&str> = line.splitn(4, ']').collect();
     if parts.len() != 4 {
         return None;
     }
-    
+
     let timestamp = parts[0].trim_start_matches('[').to_string();
     let level = parts[1].trim_start_matches(" [").to_lowercase();
     let component = parts[2].trim_start_matches(" [").to_string();
     let message = parts[3].trim_start_matches(' ').to_string();
-    
+
     Some(LogEntry {
         timestamp,
         level,
@@ -2617,7 +2896,7 @@ fn main() {
     };
 
     let twitch_state = TwitchState::default();
-    
+
     // Initialize logging state
     let logging_state = LoggingState {
         log_file_path: Arc::new(std::sync::Mutex::new("logs/vocalix.log".to_string())),
@@ -2685,6 +2964,7 @@ fn main() {
             check_environment_status,
             check_python_version,
             check_library_versions,
+            get_available_devices,
             force_reinstall_libraries,
             reset_python_environment,
             install_dependencies,
