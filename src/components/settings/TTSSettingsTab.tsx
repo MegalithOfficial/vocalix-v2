@@ -317,7 +317,7 @@ const TTSSettingsTab = ({ settingsState }: TTSSettingsTabProps) => {
                     >
                       {availableDevices.length > 0 ? ( 
                         availableDevices.map((device) => (
-                          <option key={device.id} value={device.id}>
+                          <option key={device.type} value={device.type}>
                             {device.name} ({device.type})
                           </option>
                         ))
