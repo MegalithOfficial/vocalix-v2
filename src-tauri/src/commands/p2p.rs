@@ -1,4 +1,4 @@
-use crate::p2p::handle_connection;
+use crate::services::p2p::handle_connection;
 use crate::state::{AppStateWithChannel, Message};
 use tauri::{State, Window, Emitter};
 use tokio::net::{TcpListener, TcpStream};

@@ -5,20 +5,18 @@ use reqwest;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-// Twitch OAuth2 configuration
 const TWITCH_DEVICE_URL: &str = "https://id.twitch.tv/oauth2/device";
 const TWITCH_TOKEN_URL: &str = "https://id.twitch.tv/oauth2/token";
 const TWITCH_VALIDATE_URL: &str = "https://id.twitch.tv/oauth2/validate";
 const TWITCH_REVOKE_URL: &str = "https://id.twitch.tv/oauth2/revoke";
 
-// Required scopes for channel point redemptions and basic user info
 const DEFAULT_SCOPES: &[&str] = &[
     "channel:read:redemptions",
     "channel:manage:redemptions",
     "user:read:email",
     "user:read:chat",
     "user:write:chat",
-    "moderator:read:followers", // Updated scope for follows
+    "moderator:read:followers",
     "channel:read:subscriptions",
     "bits:read",
 ];
@@ -26,7 +24,7 @@ const DEFAULT_SCOPES: &[&str] = &[
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TwitchConfig {
     pub client_id: String,
-    pub client_secret: Option<String>, // Optional for public clients
+    pub client_secret: Option<String>, 
     pub scopes: Vec<String>,
 }
 
@@ -100,7 +98,6 @@ impl TwitchOAuth {
         }
     }
 
-    /// Start the Device Code Grant flow
     pub async fn start_device_flow(&self) -> Result<DeviceCodeResponse> {
         println!("Starting Twitch Device Code Grant flow...");
 
@@ -121,7 +118,6 @@ impl TwitchOAuth {
         let response_text = response.text().await?;
 
         if !status.is_success() {
-            // Try to parse error response
             if let Ok(error_response) = serde_json::from_str::<TokenErrorResponse>(&response_text) {
                 return Err(anyhow!(
                     "Device flow start failed: {} - {}",
@@ -145,7 +141,6 @@ impl TwitchOAuth {
         Ok(device_response)
     }
 
-    /// Poll for tokens using device code
     pub async fn poll_for_tokens(
         &self,
         device_code: &str,
@@ -161,7 +156,6 @@ impl TwitchOAuth {
             ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
         ];
 
-        // Add client_secret if this is a confidential client
         let client_secret_str;
         if let Some(ref secret) = self.config.client_secret {
             client_secret_str = secret.clone();
@@ -197,7 +191,6 @@ impl TwitchOAuth {
                     scope: token_response.scope,
                 });
             } else {
-                // Parse error response
                 if let Ok(error_response) =
                     serde_json::from_str::<TokenErrorResponse>(&response_text)
                 {
@@ -208,7 +201,6 @@ impl TwitchOAuth {
                         }
                         "slow_down" => {
                             println!("Polling too fast, slowing down...");
-                            // Increase the polling interval when told to slow down
                             poll_interval = poll_interval + Duration::from_secs(5);
                             continue;
                         }
@@ -234,9 +226,7 @@ impl TwitchOAuth {
                         }
                     }
                 } else {
-                    // Handle non-JSON error responses
                     if status.as_u16() == 400 {
-                        // Check for common error messages in the response text
                         if response_text.contains("authorization_pending") {
                             println!("Authorization pending, continuing to poll...");
                             continue;
@@ -260,7 +250,6 @@ impl TwitchOAuth {
         }
     }
 
-    /// Refresh an expired access token using the refresh token
     pub async fn refresh_tokens(&self, refresh_token: &str) -> Result<TwitchTokens> {
         let mut params = vec![
             ("client_id", self.config.client_id.as_str()),
@@ -268,7 +257,6 @@ impl TwitchOAuth {
             ("refresh_token", refresh_token),
         ];
 
-        // Add client_secret if this is a confidential client
         let client_secret_str;
         if let Some(ref secret) = self.config.client_secret {
             client_secret_str = secret.clone();
@@ -288,7 +276,6 @@ impl TwitchOAuth {
         let response_text = response.text().await?;
 
         if !status.is_success() {
-            // Try to parse error response
             if let Ok(error_response) = serde_json::from_str::<TokenErrorResponse>(&response_text) {
                 return Err(anyhow!(
                     "Token refresh failed: {} - {}",
@@ -321,7 +308,6 @@ impl TwitchOAuth {
         })
     }
 
-    /// Validate a token to check if it's still valid
     pub async fn validate_token(&self, access_token: &str) -> Result<ValidationResponse> {
         let response = self
             .http_client
@@ -337,7 +323,6 @@ impl TwitchOAuth {
             if status.as_u16() == 401 {
                 return Err(anyhow!("Token is invalid or expired"));
             }
-            // Try to parse error response
             if let Ok(error_response) = serde_json::from_str::<TokenErrorResponse>(&response_text) {
                 return Err(anyhow!(
                     "Token validation failed: {} - {}",
@@ -360,7 +345,6 @@ impl TwitchOAuth {
         Ok(validation)
     }
 
-    /// Revoke a token (logout)
     pub async fn revoke_token(&self, access_token: &str) -> Result<()> {
         let params = [
             ("client_id", self.config.client_id.as_str()),
@@ -379,7 +363,6 @@ impl TwitchOAuth {
 
         if !status.is_success() {
             let response_text = response.text().await?;
-            // Try to parse error response
             if let Ok(error_response) = serde_json::from_str::<TokenErrorResponse>(&response_text) {
                 return Err(anyhow!(
                     "Token revocation failed: {} - {}",
@@ -400,7 +383,6 @@ impl TwitchOAuth {
         Ok(())
     }
 
-    /// Get user information
     pub async fn get_user_info(&self, access_token: &str) -> Result<UserInfo> {
         let response = self
             .http_client
@@ -417,7 +399,6 @@ impl TwitchOAuth {
             if status.as_u16() == 401 {
                 return Err(anyhow!("Invalid or expired token"));
             }
-            // Try to parse error response
             if let Ok(error_response) = serde_json::from_str::<serde_json::Value>(&response_text) {
                 if let Some(message) = error_response.get("message").and_then(|m| m.as_str()) {
                     return Err(anyhow!("Failed to get user info: {}", message));
@@ -446,7 +427,6 @@ impl TwitchOAuth {
     }
 }
 
-/// Secure token storage using system keyring
 pub struct TwitchTokenStorage;
 
 impl TwitchTokenStorage {
@@ -483,7 +463,6 @@ impl TwitchTokenStorage {
     }
 }
 
-/// Secure client credential storage using system keyring
 pub struct TwitchCredentialStorage;
 
 impl TwitchCredentialStorage {
@@ -532,7 +511,6 @@ impl TwitchCredentialStorage {
     }
 }
 
-/// High-level OAuth manager that handles the complete Device Code Grant flow
 #[derive(Clone)]
 pub struct TwitchAuthManager {
     oauth: TwitchOAuth,
@@ -545,22 +523,17 @@ impl TwitchAuthManager {
         }
     }
 
-    /// Complete Device Code Grant flow
     pub async fn authenticate(&self) -> Result<(TwitchTokens, String)> {
         println!("Starting Twitch Device Code Grant authentication...");
 
-        // Start the device flow
         let device_response = self.oauth.start_device_flow().await?;
 
-        // Create user instructions with the verification URI
         let user_instructions = if device_response.verification_uri.contains("device-code=") {
-            // The URI already contains the device code
             format!(
                 "Please visit {} to complete authentication",
                 device_response.verification_uri
             )
         } else {
-            // Need to provide both URI and code separately
             format!(
                 "Please visit {} and enter code: {}",
                 device_response.verification_uri, device_response.user_code
@@ -570,54 +543,45 @@ impl TwitchAuthManager {
         println!("Please visit: {}", device_response.verification_uri);
         println!("User code: {}", device_response.user_code);
 
-        // Poll for tokens
         let poll_interval = Duration::from_secs(device_response.interval as u64);
         let tokens = self
             .oauth
             .poll_for_tokens(&device_response.device_code, poll_interval)
             .await?;
 
-        // Save tokens securely
         TwitchTokenStorage::save_tokens(&tokens)?;
         println!("Authentication successful! Tokens saved securely.");
 
         Ok((tokens, user_instructions))
     }
 
-    /// Start Device Code Grant flow and return device code info immediately
     pub async fn start_device_flow_async(&self) -> Result<DeviceCodeResponse> {
         println!("Starting Twitch Device Code Grant flow...");
         self.oauth.start_device_flow().await
     }
 
-    /// Complete the polling phase of Device Code Grant flow
     pub async fn complete_device_flow(
         &self,
         device_response: &DeviceCodeResponse,
     ) -> Result<TwitchTokens> {
         println!("Starting token polling...");
 
-        // Poll for tokens
         let poll_interval = Duration::from_secs(device_response.interval as u64);
         let tokens = self
             .oauth
             .poll_for_tokens(&device_response.device_code, poll_interval)
             .await?;
 
-        // Save tokens securely
         TwitchTokenStorage::save_tokens(&tokens)?;
         println!("Authentication successful! Tokens saved securely.");
 
         Ok(tokens)
     }
 
-    /// Get valid tokens, refreshing if necessary
     pub async fn get_valid_tokens(&self) -> Result<TwitchTokens> {
-        // Try to load existing tokens
         let mut tokens = TwitchTokenStorage::load_tokens()
             .map_err(|_| anyhow!("No saved tokens found. Please authenticate first."))?;
 
-        // Check if tokens are still valid (with 5 minute buffer)
         let expires_soon = tokens.expires_at < (Utc::now() + chrono::Duration::minutes(5));
 
         if expires_soon {
@@ -636,89 +600,71 @@ impl TwitchAuthManager {
         Ok(tokens)
     }
 
-    /// Validate current tokens
     pub async fn validate_current_tokens(&self) -> Result<ValidationResponse> {
         let tokens = self.get_valid_tokens().await?;
         self.oauth.validate_token(&tokens.access_token).await
     }
 
-    /// Get user information
     pub async fn get_user_info(&self) -> Result<UserInfo> {
         let tokens = self.get_valid_tokens().await?;
         self.oauth.get_user_info(&tokens.access_token).await
     }
 
-    /// Sign out (revoke tokens and delete from storage)
     pub async fn sign_out(&self) -> Result<()> {
         if let Ok(tokens) = TwitchTokenStorage::load_tokens() {
-            // Try to revoke the token (best effort)
             let _ = self.oauth.revoke_token(&tokens.access_token).await;
         }
 
-        // Delete stored tokens
         TwitchTokenStorage::delete_tokens()?;
         println!("Signed out successfully!");
         Ok(())
     }
 
-    /// Check if user is authenticated
     pub fn is_authenticated() -> bool {
         TwitchTokenStorage::tokens_exist()
     }
 
-    /// Get the client ID for API calls
     pub fn get_client_id(&self) -> &str {
         &self.oauth.config.client_id
     }
 
-    /// Save client credentials to keyring
     pub fn save_client_credentials(client_id: &str, client_secret: Option<&str>) -> Result<()> {
         TwitchCredentialStorage::save_credentials(client_id, client_secret)
     }
 
-    /// Load client credentials from keyring
     pub fn load_client_credentials() -> Result<(String, Option<String>)> {
         TwitchCredentialStorage::load_credentials()
     }
 
-    /// Delete client credentials from keyring
     pub fn delete_client_credentials() -> Result<()> {
         TwitchCredentialStorage::delete_credentials()
     }
 
-    /// Check if client credentials are saved
     pub fn has_saved_credentials() -> bool {
         TwitchCredentialStorage::credentials_exist()
     }
 
-    /// Create TwitchAuthManager from saved credentials
     pub fn from_saved_credentials() -> Result<Self> {
         let (client_id, client_secret) = Self::load_client_credentials()?;
         Ok(Self::new(client_id, client_secret))
     }
 
-    /// Get the current authentication status
     pub async fn get_auth_status(&self) -> Result<AuthStatus> {
-        // Check if tokens exist
         if !TwitchTokenStorage::tokens_exist() {
             return Ok(AuthStatus::NotAuthenticated);
         }
 
-        // Try to load tokens
         let tokens = match TwitchTokenStorage::load_tokens() {
             Ok(tokens) => tokens,
             Err(_) => return Ok(AuthStatus::NotAuthenticated),
         };
 
-        // Check if tokens are still valid (with 5 minute buffer)
         let expires_soon = tokens.expires_at < (Utc::now() + chrono::Duration::minutes(5));
         let is_expired = tokens.expires_at < Utc::now();
 
-        // If expired, try to validate with API to be sure
         if is_expired {
             match self.oauth.validate_token(&tokens.access_token).await {
                 Ok(_) => {
-                    // Token is still valid according to API, but close to expiry
                     if expires_soon {
                         Ok(AuthStatus::ExpiringSoon(tokens.expires_at))
                     } else {
@@ -730,7 +676,6 @@ impl TwitchAuthManager {
         } else if expires_soon {
             Ok(AuthStatus::ExpiringSoon(tokens.expires_at))
         } else {
-            // Validate with API to be sure
             match self.oauth.validate_token(&tokens.access_token).await {
                 Ok(_) => Ok(AuthStatus::Valid),
                 Err(_) => Ok(AuthStatus::Invalid),
@@ -743,16 +688,6 @@ impl TwitchAuthManager {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn test_device_flow_start() {
-        // This test requires a real client ID to work
-        // let oauth = TwitchOAuth::new("your_client_id".to_string(), None);
-        // let device_response = oauth.start_device_flow().await.unwrap();
-        // assert!(!device_response.device_code.is_empty());
-        // assert!(!device_response.user_code.is_empty());
-        // assert!(device_response.verification_uri.contains("twitch.tv"));
-    }
-
     #[test]
     fn test_token_storage() {
         let tokens = TwitchTokens {
@@ -763,7 +698,6 @@ mod tests {
             scope: vec!["channel:read:redemptions".to_string()],
         };
 
-        // This test might fail in CI/CD environments without keyring access
         if let Ok(_) = TwitchTokenStorage::save_tokens(&tokens) {
             let loaded = TwitchTokenStorage::load_tokens().unwrap();
             assert_eq!(loaded.access_token, tokens.access_token);
@@ -778,11 +712,9 @@ mod tests {
         let auth_manager = TwitchAuthManager::new("test_client_id".to_string(), None);
         let scopes = &auth_manager.oauth.config.scopes;
 
-        // Verify required scopes are present
         assert!(scopes.contains(&"channel:read:redemptions".to_string()));
         assert!(scopes.contains(&"user:read:email".to_string()));
 
-        // Verify updated scopes
         assert!(scopes.contains(&"user:read:chat".to_string()));
         assert!(scopes.contains(&"user:write:chat".to_string()));
     }
@@ -792,12 +724,11 @@ mod tests {
         let tokens = TwitchTokens {
             access_token: "test_token".to_string(),
             refresh_token: Some("test_refresh".to_string()),
-            expires_at: Utc::now() + chrono::Duration::minutes(2), // Expires in 2 minutes
+            expires_at: Utc::now() + chrono::Duration::minutes(2), 
             token_type: "bearer".to_string(),
             scope: vec!["test:scope".to_string()],
         };
 
-        // Should be considered as expiring soon (within 5 minute buffer)
         let expires_soon = tokens.expires_at < (Utc::now() + chrono::Duration::minutes(5));
         assert!(expires_soon);
     }

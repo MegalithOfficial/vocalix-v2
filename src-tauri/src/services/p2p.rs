@@ -1,5 +1,5 @@
 use crate::state::{ConnectionState, Message, SessionKeys};
-use crate::pairing::{self, AppState};
+use crate::state::AppState;
 use p256::ecdh::EphemeralSecret;
 use ring::aead;
 use std::sync::Arc;
@@ -8,7 +8,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{broadcast, mpsc, Mutex};
 
-// --- Core Connection Handler with Complete Encryption ---
 pub async fn handle_connection(
     mut stream: TcpStream,
     window: Window,
@@ -42,7 +41,6 @@ pub async fn handle_connection(
     )
     .await;
 
-    // Connection state
     let mut connection_state = ConnectionState::Authenticating;
     let mut peer_public_key_hex: Option<String> = None;
     let mut long_term_secret: Option<Vec<u8>> = None;
@@ -50,16 +48,13 @@ pub async fn handle_connection(
     let mut session_keys: Option<SessionKeys> = None;
     let mut challenge_nonce: Option<Vec<u8>> = None;
 
-    // Create message channel for UI to send messages
     let (msg_tx, mut msg_rx) = mpsc::unbounded_channel::<String>();
 
-    // Set the message sender in the shared state so UI can send messages
     {
         let mut shared_tx = message_tx.lock().await;
         *shared_tx = Some(msg_tx);
     }
 
-    // Start the protocol if we're the initiator
     if is_initiator {
         log_and_emit(&window, role, "PROTOCOL_START", "Sending Hello message").await;
         let msg = Message::Hello(my_public_key_bytes.clone());
@@ -125,7 +120,7 @@ pub async fn handle_connection(
                             // New peer - start DH exchange for pairing
                             log_and_emit(&window, role, "NEW_PEER", "Unknown peer, starting DH key exchange").await;
                             window.emit("STATUS_UPDATE", "New peer. Starting DH exchange...").unwrap();
-                            let (priv_key, pub_key) = pairing::perform_dh_exchange();
+                            let (priv_key, pub_key) = crate::services::pairing::perform_dh_exchange();
                             temp_dh_private_key = Some(priv_key);
                             let msg = Message::InitialDhKey(pub_key.to_sec1_bytes().into_vec());
                             log_and_emit(&window, role, "DH_KEY_SENT", "Sent initial DH public key").await;
@@ -143,11 +138,11 @@ pub async fn handle_connection(
                         if let Some(secret) = peers.get(peer_public_key_hex.as_ref().unwrap()) {
                             log_and_emit(&window, role, "CHALLENGE_PROCESSING", "Creating signature response").await;
                             window.emit("STATUS_UPDATE", "Challenge received. Responding...").unwrap();
-                            let signature = pairing::create_challenge_signature(secret, nonce);
+                            let signature = crate::services::pairing::create_challenge_signature(secret, nonce);
                             let msg = Message::ChallengeResponse(signature.as_ref().to_vec());
                             log_and_emit(&window, role, "CHALLENGE_RESPONSE_SENT", &format!("Signature: {}", hex::encode(signature.as_ref()))).await;
                             send_message(&mut stream, &msg).await;
-                            // After sending challenge response, we're ready for session key establishment
+                            // After sending challenge response, ready for session key establishment
                             window.emit("STATUS_UPDATE", "Challenge sent. Waiting for session setup...").unwrap();
                         } else {
                             log_and_emit(&window, role, "CHALLENGE_ERROR", "Challenged by unknown peer").await;
@@ -159,11 +154,11 @@ pub async fn handle_connection(
                     (ConnectionState::Authenticating, Message::ChallengeResponse(signature)) => {
                         log_and_emit(&window, role, "CHALLENGE_RESPONSE_RECEIVED", &format!("Signature: {}", hex::encode(signature))).await;
                         if let (Some(secret), Some(nonce)) = (long_term_secret.as_ref(), challenge_nonce.as_ref()) {
-                            if pairing::verify_challenge_signature(secret, nonce, signature) {
+                            if crate::services::pairing::verify_challenge_signature(secret, nonce, signature) {
                                 log_and_emit(&window, role, "AUTH_SUCCESS", "Challenge signature verified successfully").await;
                                 window.emit("STATUS_UPDATE", "Authentication successful! Setting up secure session...").unwrap();
                                 // Proceed to session key establishment
-                                let (session_priv, session_pub) = pairing::perform_dh_exchange();
+                                let (session_priv, session_pub) = crate::services::pairing::perform_dh_exchange();
                                 temp_dh_private_key = Some(session_priv);
                                 let msg = Message::SessionKeyRequest(session_pub.to_sec1_bytes().into_vec());
                                 log_and_emit(&window, role, "SESSION_KEY_REQUEST_SENT", "Requesting session key establishment").await;
@@ -178,12 +173,12 @@ pub async fn handle_connection(
 
                     (ConnectionState::Authenticating, Message::InitialDhKey(peer_dh_key)) => {
                         window.emit("STATUS_UPDATE", "DH key received. Generating shared secret...").unwrap();
-                        let (priv_key, pub_key) = pairing::perform_dh_exchange();
+                        let (priv_key, pub_key) = crate::services::pairing::perform_dh_exchange();
                         let peer_public_key = p256::PublicKey::from_sec1_bytes(peer_dh_key).unwrap();
                         let shared_secret = priv_key.diffie_hellman(&peer_public_key);
                         long_term_secret = Some(shared_secret.raw_secret_bytes().to_vec());
 
-                        let code = pairing::generate_6_digit_code(long_term_secret.as_ref().unwrap());
+                        let code = crate::services::pairing::generate_6_digit_code(long_term_secret.as_ref().unwrap());
                         window.emit("PAIRING_REQUIRED", code).unwrap();
 
                         temp_dh_private_key = Some(priv_key);
@@ -199,7 +194,7 @@ pub async fn handle_connection(
                             .diffie_hellman(&peer_public_key);
                         long_term_secret = Some(shared_secret.raw_secret_bytes().to_vec());
 
-                        let code = pairing::generate_6_digit_code(long_term_secret.as_ref().unwrap());
+                        let code = crate::services::pairing::generate_6_digit_code(long_term_secret.as_ref().unwrap());
                         window.emit("PAIRING_REQUIRED", code).unwrap();
                         window.emit("STATUS_UPDATE", "Code displayed. Waiting for user confirmation...").unwrap();
 
@@ -211,7 +206,7 @@ pub async fn handle_connection(
                         window.emit("STATUS_UPDATE", "Peer confirmed pairing. Setting up secure session...").unwrap();
 
                         // Now establish session keys for forward secrecy
-                        let (session_priv, session_pub) = pairing::perform_dh_exchange();
+                        let (session_priv, session_pub) = crate::services::pairing::perform_dh_exchange();
                         temp_dh_private_key = Some(session_priv);
                         let msg = Message::SessionKeyRequest(session_pub.to_sec1_bytes().into_vec());
                         log_and_emit(&window, role, "POST_PAIRING_SESSION_REQUEST", "Requesting session keys after both confirmed").await;
@@ -229,10 +224,10 @@ pub async fn handle_connection(
                     (ConnectionState::Authenticating, Message::SessionKeyRequest(session_pub_key)) => {
                         log_and_emit(&window, role, "SESSION_KEY_REQUEST_RECEIVED", "Creating session keys from ephemeral DH").await;
                         window.emit("STATUS_UPDATE", "Creating session keys...").unwrap();
-                        let (session_priv, my_session_pub) = pairing::perform_dh_exchange();
+                        let (session_priv, my_session_pub) = crate::services::pairing::perform_dh_exchange();
 
                         // Create session keys using the session DH exchange
-                        match pairing::create_session_keys(&session_priv, session_pub_key) {
+                        match crate::services::pairing::create_session_keys(&session_priv, session_pub_key) {
                             Ok((decryption_key, encryption_key)) => {
                                 log_and_emit(&window, role, "SESSION_KEYS_CREATED", "Session encryption keys established").await;
                                 session_keys = Some(SessionKeys {
@@ -266,7 +261,7 @@ pub async fn handle_connection(
                         log_and_emit(&window, role, "SESSION_KEY_RESPONSE_RECEIVED", "Completing session key setup").await;
                         window.emit("STATUS_UPDATE", "Completing session key setup...").unwrap();
                         if let Some(session_priv) = temp_dh_private_key.take() {
-                            match pairing::create_session_keys(&session_priv, session_pub_key) {
+                            match crate::services::pairing::create_session_keys(&session_priv, session_pub_key) {
                                 Ok((encryption_key, decryption_key)) => {
                                     log_and_emit(&window, role, "SESSION_KEYS_COMPLETED", "Session keys created, waiting for encryption ready").await;
                                     session_keys = Some(SessionKeys {
@@ -323,12 +318,12 @@ pub async fn handle_connection(
                                                 window.emit("REDEMPTION_RECEIVED", redemption_data).unwrap();
                                             },
                                             _ => {
-                                                // Not a redemption message, treat as regular message
+                                                // Not a redemption message
                                                 window.emit("MESSAGE_RECEIVED", plaintext).unwrap();
                                             }
                                         }
                                     } else {
-                                        // Not JSON or not a redemption message, treat as regular chat
+                                        // Not JSON or not a redemption message
                                         window.emit("MESSAGE_RECEIVED", plaintext).unwrap();
                                     }
                                 },
@@ -345,10 +340,10 @@ pub async fn handle_connection(
                         // Peer confirmed and immediately sent session key request
                         log_and_emit(&window, role, "SESSION_KEY_REQUEST_RECEIVED", "Creating session keys from ephemeral DH").await;
                         window.emit("STATUS_UPDATE", "Creating session keys...").unwrap();
-                        let (session_priv, my_session_pub) = pairing::perform_dh_exchange();
+                        let (session_priv, my_session_pub) = crate::services::pairing::perform_dh_exchange();
 
                         // Create session keys using the session DH exchange
-                        match pairing::create_session_keys(&session_priv, session_pub_key) {
+                        match crate::services::pairing::create_session_keys(&session_priv, session_pub_key) {
                             Ok((decryption_key, encryption_key)) => {
                                 log_and_emit(&window, role, "SESSION_KEYS_CREATED", "Session encryption keys established").await;
                                 session_keys = Some(SessionKeys {
@@ -397,7 +392,7 @@ pub async fn handle_connection(
                             if let (Some(key), Some(secret)) = (peer_public_key_hex.clone(), long_term_secret.clone()) {
                                 let mut peers = state.known_peers.lock().await;
                                 peers.insert(key.clone(), secret);
-                                if let Err(e) = pairing::save_known_peers(&peers) {
+                                if let Err(e) = crate::services::pairing::save_known_peers(&peers) {
                                     log_and_emit(&window, role, "SAVE_PEER_ERROR", &format!("Failed to save peer: {}", e)).await;
                                     window.emit("ERROR", format!("Failed to save peer: {}", e)).unwrap();
                                 } else {
@@ -430,7 +425,7 @@ pub async fn handle_connection(
                         ConnectionState::Encrypted => {
                             // Check if this is a serialized redemption message or regular chat
                             if let Ok(redemption_msg) = serde_json::from_str::<Message>(&message) {
-                                // This is a serialized redemption message
+                                // serialized redemption message
                                 match redemption_msg {
                                     Message::RedemptionMessage { audio, title, content, message_type, time } => {
                                         log_and_emit(&window, role, "SENDING_REDEMPTION", &format!("Type: {}, Title: {}, Audio: {} bytes", message_type, &title, audio.len())).await;
@@ -506,8 +501,6 @@ async fn decrypt_message(
     String::from_utf8(plaintext_bytes.to_vec()).map_err(|_| "Invalid UTF-8".to_string())
 }
 
-// --- Helper Functions ---
-
 async fn log_and_emit(window: &Window, role: &str, event: &str, details: &str) {
     let log_msg = format!("[{}] {}: {}", role, event, details);
     println!("{}", log_msg);
@@ -554,7 +547,7 @@ async fn send_redemption_message(
     time: Option<u32>,
 ) {
     if let Some(keys) = session_keys {
-        let audio_len = audio.len(); // Save length before moving
+        let audio_len = audio.len(); 
         let redemption_msg = Message::RedemptionMessage {
             audio,
             title,
@@ -563,7 +556,6 @@ async fn send_redemption_message(
             time,
         };
 
-        // Serialize the redemption message
         match serde_json::to_string(&redemption_msg) {
             Ok(serialized) => match encrypt_message(keys, &serialized).await {
                 Ok((ciphertext, nonce)) => {

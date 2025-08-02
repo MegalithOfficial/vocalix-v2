@@ -1,5 +1,5 @@
 use crate::{log_debug, log_error, log_info, log_warn};
-use crate::twitch::{parse_channel_points_redemption, EventSubEvent};
+use crate::services::twitch::{parse_channel_points_redemption, EventSubEvent};
 use tauri::{Window, Emitter};
 
 #[tauri::command]
@@ -9,7 +9,7 @@ pub async fn open_url(url: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         std::process::Command::new("cmd")
-            .args(["/C", "start", "", &url]) // Added empty string for title to handle URLs with special chars
+            .args(["/C", "start", "", &url]) 
             .spawn()
             .map_err(|e| format!("Failed to open URL on Windows: {}", e))?;
     }
@@ -22,7 +22,6 @@ pub async fn open_url(url: String) -> Result<(), String> {
     }
     #[cfg(target_os = "linux")]
     {
-        // Try multiple fallback options for Linux
         let commands = [
             "xdg-open",
             "gnome-open",
@@ -41,7 +40,6 @@ pub async fn open_url(url: String) -> Result<(), String> {
                 .stderr(std::process::Stdio::null())
                 .spawn()
             {
-                // Don't wait for the command to finish, just let it run
                 let _ = child.wait();
                 success = true;
                 log_info!("URLHandler", "Successfully opened URL with: {}", cmd);
@@ -61,7 +59,6 @@ pub async fn open_url(url: String) -> Result<(), String> {
     Ok(())
 }
 
-// Helper function to handle Twitch EventSub events
 pub async fn handle_twitch_event(
     window: &Window,
     event: EventSubEvent,
@@ -135,7 +132,6 @@ pub async fn handle_twitch_event(
                         "Unhandled event type: {}",
                         subscription_type
                     );
-                    // Forward other events as generic events
                     let event_data = serde_json::json!({
                         "type": subscription_type,
                         "data": event
@@ -159,18 +155,16 @@ pub async fn handle_twitch_event(
             )?;
         }
 
-        EventSubEvent::Keepalive => {
-            // Keepalive messages don't need special handling
-        }
+        EventSubEvent::Keepalive => { }
 
         EventSubEvent::ConnectionStateChanged(state) => {
             log_info!("TwitchEventSub", "Connection state changed: {:?}", state);
             let status = match state {
-                crate::twitch::EventSubConnectionState::Connecting => "Connecting to Twitch...",
-                crate::twitch::EventSubConnectionState::Connected => "Connected to Twitch",
-                crate::twitch::EventSubConnectionState::Reconnecting => "Reconnecting...",
-                crate::twitch::EventSubConnectionState::Disconnected => "Disconnected from Twitch",
-                crate::twitch::EventSubConnectionState::Failed => "Connection failed",
+                crate::services::twitch::EventSubConnectionState::Connecting => "Connecting to Twitch...",
+                crate::services::twitch::EventSubConnectionState::Connected => "Connected to Twitch",
+                crate::services::twitch::EventSubConnectionState::Reconnecting => "Reconnecting...",
+                crate::services::twitch::EventSubConnectionState::Disconnected => "Disconnected from Twitch",
+                crate::services::twitch::EventSubConnectionState::Failed => "Connection failed",
             };
             window.emit("STATUS_UPDATE", status)?;
         }

@@ -1,33 +1,27 @@
-// src-tauri/src/main.rs
-
 #![cfg_attr(
     all(not(debug_assertions), target_os = "windows"),
     windows_subsystem = "windows"
 )]
 
-mod pairing;
-mod twitch;
-mod twitch_oauth;
-mod logging;
-mod state;
-mod p2p;
-mod helpers;
 mod commands;
+mod helpers;
+mod logging;
+mod services;
+mod state;
 
-use pairing::AppState;
+use crate::services::pairing::AppState;
+use crate::state::*;
 use std::sync::Arc;
 use tauri::Manager;
 use tokio::sync::{broadcast, Mutex};
-use crate::state::*;
 
 fn main() {
-    let identity = pairing::load_or_create_identity().expect("Failed to get identity.");
-    let known_peers = pairing::load_known_peers().expect("Failed to load peers.");
+    let identity =
+        crate::services::pairing::load_or_create_identity().expect("Failed to get identity.");
+    let known_peers = crate::services::pairing::load_known_peers().expect("Failed to load peers.");
 
-    // Create a broadcast channel for UI->Backend communication
     let (tx, _rx) = broadcast::channel(1);
 
-    // Initialize Twitch integration asynchronously in setup
     let app_state = AppStateWithChannel {
         inner: AppState {
             device_identity: Arc::new(Mutex::new(Some(Arc::new(identity)))),
@@ -39,7 +33,6 @@ fn main() {
 
     let twitch_state = TwitchState::default();
 
-    // Initialize logging state
     let logging_state = LoggingState {
         log_file_path: Arc::new(std::sync::Mutex::new("logs/vocalix.log".to_string())),
     };
@@ -50,13 +43,11 @@ fn main() {
         .manage(twitch_state)
         .manage(logging_state)
         .setup(|app| {
-            // Get app data directory and create logs directory
             if let Ok(app_data_dir) = app.path().app_data_dir() {
                 let logs_dir = app_data_dir.join("logs");
                 if let Err(e) = std::fs::create_dir_all(&logs_dir) {
                     eprintln!("Failed to create logs directory {:?}: {}", logs_dir, e);
                 } else {
-                    // Update the logging state with the correct path
                     let log_file_path = logs_dir.join("vocalix.log");
                     if let Some(logging_state) = app.try_state::<LoggingState>() {
                         if let Ok(mut path) = logging_state.log_file_path.lock() {
@@ -79,7 +70,6 @@ fn main() {
             commands::p2p::send_chat_message,
             commands::p2p::send_redemption_without_timer,
             commands::p2p::send_redemption_with_timer,
-            helpers::open_url,
             commands::twitch::twitch_authenticate,
             commands::twitch::twitch_start_event_listener,
             commands::twitch::twitch_stop_event_listener,
@@ -114,6 +104,7 @@ fn main() {
             commands::log::write_log,
             commands::log::get_logs,
             commands::log::clear_logs,
+            helpers::open_url
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

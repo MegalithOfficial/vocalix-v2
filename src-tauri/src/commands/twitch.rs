@@ -1,8 +1,8 @@
 use crate::helpers::handle_twitch_event;
 use crate::{log_error, log_info};
 use crate::state::TwitchState;
-use crate::twitch::{create_common_subscriptions, TwitchEventSub};
-use crate::twitch_oauth::TwitchAuthManager;
+use crate::services::twitch::{create_common_subscriptions, TwitchEventSub};
+use crate::services::twitch_oauth::TwitchAuthManager;
 use serde::{Deserialize, Serialize};
 use tauri::{State, Window, Emitter};
 
@@ -330,10 +330,10 @@ pub async fn twitch_get_auth_status(twitch_state: State<'_, TwitchState>) -> Res
 
     match auth_manager.get_auth_status().await {
         Ok(status) => match status {
-            crate::twitch_oauth::AuthStatus::NotAuthenticated => Ok("not_authenticated".to_string()),
-            crate::twitch_oauth::AuthStatus::Invalid => Ok("invalid".to_string()),
-            crate::twitch_oauth::AuthStatus::Valid => Ok("valid".to_string()),
-            crate::twitch_oauth::AuthStatus::ExpiringSoon(_) => Ok("expiring_soon".to_string()),
+            crate::services::twitch_oauth::AuthStatus::NotAuthenticated => Ok("not_authenticated".to_string()),
+            crate::services::twitch_oauth::AuthStatus::Invalid => Ok("invalid".to_string()),
+            crate::services::twitch_oauth::AuthStatus::Valid => Ok("valid".to_string()),
+            crate::services::twitch_oauth::AuthStatus::ExpiringSoon(_) => Ok("expiring_soon".to_string()),
         },
         Err(e) => Err(format!("Failed to get auth status: {}", e)),
     }
