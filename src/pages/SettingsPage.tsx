@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, Volume2, Shield, Twitch, Volume, Settings2, FileText } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useSettingsState } from '../hooks/useSettingsState';
@@ -15,16 +15,30 @@ import LogsSettingsTab from '../components/settings/LogsSettingsTab';
 
 const SettingsPage = () => {
     const [activeTab, setActiveTab] = useState<SettingsTab>('twitch');
-    const settingsState = useSettingsState();
+    const settingsState = useSettingsState(activeTab);
+    const { onlyClientMode } = settingsState;
 
     const tabs = [
-        { id: 'twitch' as SettingsTab, label: 'Twitch Integration', icon: Twitch, color: 'purple' },
-        { id: 'audio' as SettingsTab, label: 'Audio Settings', icon: Volume2, color: 'blue' },
-        { id: 'tts' as SettingsTab, label: 'Text to Speech', icon: Volume, color: 'orange' },
-        { id: 'python-env' as SettingsTab, label: 'Python Environment', icon: Settings2, color: 'yellow' },
-        { id: 'security' as SettingsTab, label: 'Security & Privacy', icon: Shield, color: 'green' },
-        { id: 'logs' as SettingsTab, label: 'Application Logs', icon: FileText, color: 'red' },
+        { id: 'twitch' as SettingsTab, label: 'Twitch Integration', icon: Twitch, color: 'purple', serverOnly: true },
+        { id: 'audio' as SettingsTab, label: 'Audio Settings', icon: Volume2, color: 'blue', serverOnly: false },
+        { id: 'tts' as SettingsTab, label: 'Text to Speech', icon: Volume, color: 'orange', serverOnly: true },
+        { id: 'python-env' as SettingsTab, label: 'Python Environment', icon: Settings2, color: 'yellow', serverOnly: true },
+        { id: 'security' as SettingsTab, label: 'Security & Privacy', icon: Shield, color: 'green', serverOnly: false },
+        { id: 'logs' as SettingsTab, label: 'Application Logs', icon: FileText, color: 'red', serverOnly: false },
     ];
+
+    // Derive the visible tabs based on onlyClientMode
+    const visibleTabs = useMemo(() => {
+        return tabs.filter(t => !(onlyClientMode && t.serverOnly));
+    }, [onlyClientMode]);
+
+    // Ensure activeTab is always a visible tab when onlyClientMode changes
+    useEffect(() => {
+        const stillVisible = visibleTabs.some(t => t.id === activeTab);
+        if (!stillVisible && visibleTabs.length > 0) {
+            setActiveTab(visibleTabs[0].id);
+        }
+    }, [onlyClientMode, activeTab, visibleTabs]);
 
     const renderTabContent = () => {
         switch (activeTab) {
@@ -70,7 +84,7 @@ const SettingsPage = () => {
                 {/* Tab navigation */}
                 <div className="flex-1 p-4">
                     <div className="space-y-2">
-                        {tabs.map((tab) => {
+                        {visibleTabs.map((tab) => {
                             const Icon = tab.icon;
                             const isActive = activeTab === tab.id;
                             const colorClasses = {

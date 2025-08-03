@@ -44,7 +44,10 @@ pub async fn save_audio_file(
 }
 
 #[tauri::command]
-pub async fn get_audio_files(app: AppHandle, redemption_name: String) -> Result<Vec<String>, String> {
+pub async fn get_audio_files(
+    app: AppHandle,
+    redemption_name: String,
+) -> Result<Vec<String>, String> {
     use std::fs;
 
     // Get app data directory

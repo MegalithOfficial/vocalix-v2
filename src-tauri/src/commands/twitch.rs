@@ -1,10 +1,10 @@
 use crate::helpers::handle_twitch_event;
-use crate::{log_error, log_info};
-use crate::state::TwitchState;
 use crate::services::twitch::{create_common_subscriptions, TwitchEventSub};
 use crate::services::twitch_oauth::TwitchAuthManager;
+use crate::state::TwitchState;
+use crate::{log_error, log_info};
 use serde::{Deserialize, Serialize};
-use tauri::{State, Window, Emitter};
+use tauri::{Emitter, State, Window};
 
 #[tauri::command]
 pub async fn twitch_authenticate(
@@ -239,7 +239,9 @@ pub async fn twitch_start_event_listener(
 }
 
 #[tauri::command]
-pub async fn twitch_stop_event_listener(twitch_state: State<'_, TwitchState>) -> Result<(), String> {
+pub async fn twitch_stop_event_listener(
+    twitch_state: State<'_, TwitchState>,
+) -> Result<(), String> {
     // Clear the EventSub instance
     *twitch_state.event_sub.lock().await = None;
     Ok(())
@@ -317,7 +319,9 @@ pub async fn twitch_delete_credentials() -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn twitch_get_auth_status(twitch_state: State<'_, TwitchState>) -> Result<String, String> {
+pub async fn twitch_get_auth_status(
+    twitch_state: State<'_, TwitchState>,
+) -> Result<String, String> {
     // Try to create auth manager from saved credentials
     let auth_manager = match TwitchAuthManager::from_saved_credentials() {
         Ok(manager) => {
@@ -330,10 +334,14 @@ pub async fn twitch_get_auth_status(twitch_state: State<'_, TwitchState>) -> Res
 
     match auth_manager.get_auth_status().await {
         Ok(status) => match status {
-            crate::services::twitch_oauth::AuthStatus::NotAuthenticated => Ok("not_authenticated".to_string()),
+            crate::services::twitch_oauth::AuthStatus::NotAuthenticated => {
+                Ok("not_authenticated".to_string())
+            }
             crate::services::twitch_oauth::AuthStatus::Invalid => Ok("invalid".to_string()),
             crate::services::twitch_oauth::AuthStatus::Valid => Ok("valid".to_string()),
-            crate::services::twitch_oauth::AuthStatus::ExpiringSoon(_) => Ok("expiring_soon".to_string()),
+            crate::services::twitch_oauth::AuthStatus::ExpiringSoon(_) => {
+                Ok("expiring_soon".to_string())
+            }
         },
         Err(e) => Err(format!("Failed to get auth status: {}", e)),
     }

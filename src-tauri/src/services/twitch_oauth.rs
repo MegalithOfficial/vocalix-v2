@@ -24,7 +24,7 @@ const DEFAULT_SCOPES: &[&str] = &[
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TwitchConfig {
     pub client_id: String,
-    pub client_secret: Option<String>, 
+    pub client_secret: Option<String>,
     pub scopes: Vec<String>,
 }
 
@@ -724,7 +724,7 @@ mod tests {
         let tokens = TwitchTokens {
             access_token: "test_token".to_string(),
             refresh_token: Some("test_refresh".to_string()),
-            expires_at: Utc::now() + chrono::Duration::minutes(2), 
+            expires_at: Utc::now() + chrono::Duration::minutes(2),
             token_type: "bearer".to_string(),
             scope: vec!["test:scope".to_string()],
         };

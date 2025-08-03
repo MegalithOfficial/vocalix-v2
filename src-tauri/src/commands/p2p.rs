@@ -1,8 +1,7 @@
 use crate::services::p2p::handle_connection;
 use crate::state::{AppStateWithChannel, Message};
-use tauri::{State, Window, Emitter};
+use tauri::{Emitter, State, Window};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::broadcast;
 
 #[tauri::command]
 pub async fn start_listener(

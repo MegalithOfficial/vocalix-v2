@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion';
 import { Play, Pause } from 'lucide-react';
-import { useRef } from 'react';
+import { useRef, useEffect } from 'react';
 import { AudioQuality, getAudioQualitySettings, getAudioSettingsForBackend } from '../../utils/audioSettings';
 import '../../components/VolumeSlider.css';
 import { useSettingsState } from '../../hooks/useSettingsState';
@@ -21,9 +21,27 @@ const AudioSettingsTab = ({ settingsState }: AudioSettingsTabProps) => {
     setVolume,
     isTestPlaying,
     setIsTestPlaying,
+    saveAudioSettings,
   } = settingsState;
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const isInitialMount = useRef(true);
+
+  // Auto-save settings when they change
+  useEffect(() => {
+    // Don't save on initial mount - let loadAudioSettings handle that
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
+
+    const timeoutId = setTimeout(() => {
+      console.log('Auto-saving audio settings...');
+      saveAudioSettings();
+    }, 500); // Debounce saves by 500ms
+
+    return () => clearTimeout(timeoutId);
+  }, [audioQuality, selectedOutputDevice, volume, saveAudioSettings]);
 
   const handleVolumeChange = (newVolume: number) => {
     setVolume(newVolume);
@@ -113,6 +131,10 @@ const AudioSettingsTab = ({ settingsState }: AudioSettingsTabProps) => {
     }
   };
 
+  const handleAudioQualityChange = (quality: AudioQuality) => {
+    setAudioQuality(quality);
+  };
+
   const handleOutputDeviceChange = async (deviceId: string) => {
     setSelectedOutputDevice(deviceId);
 
@@ -144,7 +166,7 @@ const AudioSettingsTab = ({ settingsState }: AudioSettingsTabProps) => {
               <label className="block text-sm font-medium text-gray-300 mb-2">Audio Quality</label>
               <select
                 value={audioQuality}
-                onChange={(e) => setAudioQuality(e.target.value as AudioQuality)}
+                onChange={(e) => handleAudioQualityChange(e.target.value as AudioQuality)}
                 className="w-full px-4 py-3 bg-gray-700/50 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-purple-500"
               >
                 <option value="ultra">Ultra (48kHz, 320kbps)</option>

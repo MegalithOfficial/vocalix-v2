@@ -1,6 +1,6 @@
-use crate::{log_debug, log_error, log_info, log_warn};
 use crate::services::twitch::{parse_channel_points_redemption, EventSubEvent};
-use tauri::{Window, Emitter};
+use crate::{log_debug, log_error, log_info, log_warn};
+use tauri::{Emitter, Window};
 
 #[tauri::command]
 pub async fn open_url(url: String) -> Result<(), String> {
@@ -9,7 +9,7 @@ pub async fn open_url(url: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         std::process::Command::new("cmd")
-            .args(["/C", "start", "", &url]) 
+            .args(["/C", "start", "", &url])
             .spawn()
             .map_err(|e| format!("Failed to open URL on Windows: {}", e))?;
     }
@@ -155,15 +155,21 @@ pub async fn handle_twitch_event(
             )?;
         }
 
-        EventSubEvent::Keepalive => { }
+        EventSubEvent::Keepalive => {}
 
         EventSubEvent::ConnectionStateChanged(state) => {
             log_info!("TwitchEventSub", "Connection state changed: {:?}", state);
             let status = match state {
-                crate::services::twitch::EventSubConnectionState::Connecting => "Connecting to Twitch...",
-                crate::services::twitch::EventSubConnectionState::Connected => "Connected to Twitch",
+                crate::services::twitch::EventSubConnectionState::Connecting => {
+                    "Connecting to Twitch..."
+                }
+                crate::services::twitch::EventSubConnectionState::Connected => {
+                    "Connected to Twitch"
+                }
                 crate::services::twitch::EventSubConnectionState::Reconnecting => "Reconnecting...",
-                crate::services::twitch::EventSubConnectionState::Disconnected => "Disconnected from Twitch",
+                crate::services::twitch::EventSubConnectionState::Disconnected => {
+                    "Disconnected from Twitch"
+                }
                 crate::services::twitch::EventSubConnectionState::Failed => "Connection failed",
             };
             window.emit("STATUS_UPDATE", status)?;

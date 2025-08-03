@@ -1,8 +1,8 @@
 use crate::logging::LogEntry;
 use crate::state::LoggingState;
-use tauri::State;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
+use tauri::State;
 
 #[tauri::command]
 pub async fn write_log(
@@ -12,7 +12,6 @@ pub async fn write_log(
     timestamp: String,
     logging_state: State<'_, LoggingState>,
 ) -> Result<(), String> {
-
     let log_entry = LogEntry {
         timestamp,
         level,

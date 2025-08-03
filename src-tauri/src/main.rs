@@ -12,7 +12,9 @@ mod state;
 use crate::services::pairing::AppState;
 use crate::state::*;
 use std::sync::Arc;
+use tauri::Emitter;
 use tauri::Manager;
+use tauri_plugin_store::StoreExt;
 use tokio::sync::{broadcast, Mutex};
 
 fn main() {
@@ -38,6 +40,7 @@ fn main() {
     };
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .manage(app_state)
         .manage(twitch_state)
@@ -59,6 +62,22 @@ fn main() {
                 eprintln!("Failed to get app data directory, using relative logs path");
                 if let Err(e) = std::fs::create_dir_all("logs") {
                     eprintln!("Failed to create logs directory: {}", e);
+                }
+            }
+            // Emit only-client-mode once on boot; failure is non-fatal
+            #[allow(unused_variables)]
+            {
+                if let Ok(store) = app.store("settings.json") {
+                    let only_client_mode = match store.get("settings") {
+                        Some(settings) => match settings.get("only_client_mode") {
+                            Some(v) => v.as_bool().unwrap_or(false),
+                            None => false,
+                        },
+                        None => false,
+                    };
+                    let _ = app.emit("CLIENT_ONLY_MODE", only_client_mode);
+                } else {
+                    let _ = app.emit("CLIENT_ONLY_MODE", false);
                 }
             }
             Ok(())
@@ -87,6 +106,7 @@ fn main() {
             commands::audio::delete_audio_file,
             commands::tts::save_tts_settings,
             commands::tts::load_tts_settings,
+            commands::tts::generate_tts,
             commands::python::save_pth_model,
             commands::python::get_pth_models,
             commands::python::delete_pth_model,
@@ -101,6 +121,12 @@ fn main() {
             commands::python::reset_python_environment,
             commands::python::install_dependencies,
             commands::python::download_models,
+            commands::python::validate_server_requirements,
+            commands::network::get_lan_ip,
+            commands::network::get_network_info,
+            commands::security::save_security_settings,
+            commands::security::load_security_settings,
+            commands::security::restart_app,
             commands::log::write_log,
             commands::log::get_logs,
             commands::log::clear_logs,

@@ -70,5 +70,5 @@ pub enum Message {
         time: Option<u32>, // time in seconds, only present when message_type = 1
     },
 
-    PlaintextMessage(String), 
+    PlaintextMessage(String),
 }

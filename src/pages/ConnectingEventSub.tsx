@@ -19,8 +19,40 @@ const ConnectingEventSub = () => {
   ];
 
   useEffect(() => {
-    let timeoutId: number | undefined;
     let mounted = true;
+    let unlistenStatus: Promise<() => void>;
+    let unlistenError: Promise<() => void>;
+    let unlistenEventSubConnected: Promise<() => void>;
+
+    const handleError = async (errorMessage: string) => {
+      console.error('EventSub error occurred, disconnecting...', errorMessage);
+      logger.error('ConnectingEventSub', `Error occurred: ${errorMessage}, initiating disconnect...`);
+      
+      if (mounted) {
+        setError(errorMessage);
+      }
+
+      // Stop the EventSub listener and disconnect
+      try {
+        await invoke('twitch_stop_event_listener');
+        logger.info('ConnectingEventSub', 'EventSub listener stopped due to error');
+        console.log('EventSub disconnected successfully after error');
+      } catch (stopError) {
+        console.error('Failed to stop EventSub listener:', stopError);
+        logger.error('ConnectingEventSub', `Failed to stop EventSub listener: ${stopError}`);
+      }
+
+      // Clean up all listeners
+      try {
+        if (unlistenStatus) unlistenStatus.then(f => f());
+        if (unlistenError) unlistenError.then(f => f());
+        if (unlistenEventSubConnected) unlistenEventSubConnected.then(f => f());
+        logger.info('ConnectingEventSub', 'All event listeners cleaned up');
+      } catch (cleanupError) {
+        console.error('Failed to cleanup listeners:', cleanupError);
+        logger.error('ConnectingEventSub', `Failed to cleanup listeners: ${cleanupError}`);
+      }
+    };
 
     const initializeEventSub = async () => {
       try {
@@ -31,56 +63,63 @@ const ConnectingEventSub = () => {
 
         // Step 1: Start EventSub connection
         setCurrentStep(0);
-        await new Promise(resolve => setTimeout(resolve, 1000)); // Visual delay
         if (!mounted) return;
 
         await invoke('twitch_start_event_listener');
         if (!mounted) return;
         
-        // Step 2: Setting up subscriptions
+        // Step 2: Setting up subscriptions (automatically progresses when backend emits status)
         setCurrentStep(1);
-        await new Promise(resolve => setTimeout(resolve, 1500)); // Visual delay
         if (!mounted) return;
 
-        // Step 3: Ready
-        setCurrentStep(2);
-        await new Promise(resolve => setTimeout(resolve, 1000)); // Visual delay
-        if (!mounted) return;
-
-        // Auto-navigate to server page after successful connection
-        timeoutId = window.setTimeout(() => {
-          if (mounted) {
-            navigate('/server');
-          }
-        }, 2000);
-
+        // Step 3: Ready (will be set by event listeners)
+        // The backend should emit events to indicate completion
+        
       } catch (error) {
         console.error('EventSub initialization failed:', error);
-        if (mounted) {
-          setError(error as string);
-          // Clear any existing timeout on error
-          if (timeoutId !== undefined) {
-            clearTimeout(timeoutId);
-            timeoutId = undefined;
-          }
-        }
+        await handleError(error as string);
       }
     };
 
     // Listen for EventSub events
-    const unlistenStatus = listen('STATUS_UPDATE', (event) => {
+    unlistenStatus = listen('STATUS_UPDATE', (event) => {
       logger.info('ConnectingEventSub', `Status update: ${event.payload}`);
+      const payload = event.payload as string;
+      
+      if (payload.includes('Connection state changed: Connected') || 
+          payload.includes('WebSocket session established') ||
+          payload.includes('EventSub connected') || 
+          payload.includes('Subscriptions created')) {
+        setCurrentStep(2); // Mark as ready
+        // Navigate to server page after successful connection
+        setTimeout(() => {
+          if (mounted) {
+            navigate('/server');
+          }
+        }, 1500); // Brief delay to show completion
+      } else if (payload.includes('Connection state changed: Connecting')) {
+        setCurrentStep(1); // Show subscribing step when connecting
+      }
     });
 
-    const unlistenError = listen('ERROR', (event) => {
-      console.error('EventSub error:', event.payload);
+    unlistenError = listen('ERROR', async (event) => {
+      const errorMessage = event.payload as string;
+      console.log('ERROR event received:', errorMessage);
+      logger.error('ConnectingEventSub', `ERROR event received: ${errorMessage}`);
+      await handleError(errorMessage);
+    });
+
+    // Listen for successful EventSub connection
+    unlistenEventSubConnected = listen('EVENTSUB_CONNECTED', () => {
+      logger.info('ConnectingEventSub', 'EventSub connection established');
       if (mounted) {
-        setError(event.payload as string);
-        // Clear any existing timeout on error
-        if (timeoutId !== undefined) {
-          clearTimeout(timeoutId);
-          timeoutId = undefined;
-        }
+        setCurrentStep(2);
+        // Navigate after a brief moment to show success
+        setTimeout(() => {
+          if (mounted) {
+            navigate('/server');
+          }
+        }, 1500);
       }
     });
 
@@ -88,11 +127,9 @@ const ConnectingEventSub = () => {
 
     return () => {
       mounted = false;
-      if (timeoutId !== undefined) {
-        clearTimeout(timeoutId);
-      }
-      unlistenStatus.then(f => f());
-      unlistenError.then(f => f());
+      if (unlistenStatus) unlistenStatus.then(f => f());
+      if (unlistenError) unlistenError.then(f => f());
+      if (unlistenEventSubConnected) unlistenEventSubConnected.then(f => f());
     };
   }, [navigate]);
 

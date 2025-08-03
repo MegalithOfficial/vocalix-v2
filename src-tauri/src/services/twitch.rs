@@ -13,8 +13,8 @@ use url::Url;
 const EVENTSUB_WEBSOCKET_URL: &str = "wss://eventsub.wss.twitch.tv/ws";
 
 const DEFAULT_KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(10);
-const SUBSCRIPTION_TIMEOUT: Duration = Duration::from_secs(10);
-const RECONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+//const SUBSCRIPTION_TIMEOUT: Duration = Duration::from_secs(10);
+//const RECONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_RECONNECT_ATTEMPTS: usize = 5;
 
 const CLOSE_CODE_INTERNAL_SERVER_ERROR: u16 = 4000;
@@ -740,7 +740,7 @@ mod tests {
             })
             .unwrap();
 
-        assert_eq!(channel_points.1, "1"); 
+        assert_eq!(channel_points.1, "1");
         assert_eq!(channel_points.2["broadcaster_user_id"], "12345");
     }
 

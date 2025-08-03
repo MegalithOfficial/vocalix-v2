@@ -1,9 +1,9 @@
-use crate::state::{ConnectionState, Message, SessionKeys};
 use crate::state::AppState;
+use crate::state::{ConnectionState, Message, SessionKeys};
 use p256::ecdh::EphemeralSecret;
 use ring::aead;
 use std::sync::Arc;
-use tauri::{Window, Emitter};
+use tauri::{Emitter, Window};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{broadcast, mpsc, Mutex};
@@ -463,7 +463,6 @@ pub async fn handle_connection(
     }
 }
 
-
 async fn encrypt_message(
     keys: &SessionKeys,
     plaintext: &str,
@@ -547,7 +546,7 @@ async fn send_redemption_message(
     time: Option<u32>,
 ) {
     if let Some(keys) = session_keys {
-        let audio_len = audio.len(); 
+        let audio_len = audio.len();
         let redemption_msg = Message::RedemptionMessage {
             audio,
             title,

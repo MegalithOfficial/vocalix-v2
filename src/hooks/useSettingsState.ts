@@ -10,7 +10,7 @@ import {
   TwitchAuthStatus 
 } from '../types/settings';
 
-export const useSettingsState = () => {
+export const useSettingsState = (activeTab?: string) => {
   // Audio Settings State
   const [audioQuality, setAudioQuality] = useState<AudioQuality>('high');
   const [outputDevices, setOutputDevices] = useState<MediaDeviceInfo[]>([]);
@@ -20,8 +20,8 @@ export const useSettingsState = () => {
 
   // TTS Settings State
   const [ttsMode, setTtsMode] = useState<'normal' | 'rvc'>('normal');
-  const [ttsProvider, setTtsProvider] = useState('openai');
-  const [ttsVoice, setTtsVoice] = useState('alloy');
+  const [ttsProvider, setTtsProvider] = useState('edgetts');
+  const [ttsVoice, setTtsVoice] = useState('en-US-JennyNeural');
   const [rvcModelFile, setRvcModelFile] = useState<File | null>(null);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>('');
@@ -59,12 +59,16 @@ export const useSettingsState = () => {
   // Security Settings State
   const [autoAccept, setAutoAccept] = useState(false);
   const [manualConfirm, setManualConfirm] = useState(true);
+  const [p2pPort, setP2pPort] = useState(12345);
+  const [onlyClientMode, setOnlyClientMode] = useState(false);
 
   // Check Twitch auth status
   const checkTwitchAuthStatus = async () => {
     try {
       const status = await invoke('twitch_get_auth_status') as string;
-      console.log('SettingsPage: Received auth status:', status);
+      if (activeTab === 'twitch') {
+        console.log('SettingsPage: Received auth status:', status);
+      }
       if (status === 'no_credentials') {
         setTwitchAuthStatus('needs_credentials');
       } else if (status === 'valid') {
@@ -242,6 +246,8 @@ export const useSettingsState = () => {
         rvcSettings
       };
 
+      console.log('Saving TTS config:', ttsConfig);
+
       await invoke('save_tts_settings', {
         config: ttsConfig
       });
@@ -252,18 +258,85 @@ export const useSettingsState = () => {
     }
   };
 
+  const saveSecuritySettings = async () => {
+    try {
+      await invoke('save_security_settings', {
+        settings: {
+          p2p_port: p2pPort,
+          only_client_mode: onlyClientMode
+        }
+      });
+      console.log('Security settings saved successfully');
+    } catch (error) {
+      console.error('Error saving security settings:', error);
+    }
+  };
+
+  const saveAudioSettings = async () => {
+    try {
+      const audioConfig = {
+        audioQuality,
+        selectedOutputDevice,
+        volume
+      };
+
+      console.log('Saving audio config:', audioConfig);
+
+      const store = await load('audio-settings.json', { autoSave: false });
+      await store.set('audioSettings', audioConfig);
+      await store.save();
+
+      console.log('Audio settings saved successfully');
+    } catch (error) {
+      console.error('Error saving audio settings:', error);
+    }
+  };
+
+  const loadAudioSettings = async () => {
+    try {
+      const store = await load('audio-settings.json', { autoSave: false });
+      const config = await store.get<{
+        audioQuality: AudioQuality;
+        selectedOutputDevice: string;
+        volume: number;
+      }>('audioSettings');
+      
+      console.log('Loaded audio config from storage:', config);
+      
+      if (config) {
+        setAudioQuality(config.audioQuality || 'high');
+        setSelectedOutputDevice(config.selectedOutputDevice || 'default');
+        setVolume(config.volume || 50);
+        console.log('Audio settings loaded successfully:', {
+          quality: config.audioQuality,
+          device: config.selectedOutputDevice,
+          volume: config.volume
+        });
+      }
+    } catch (error) {
+      console.log('No saved audio settings found, using defaults');
+    }
+  };
+
   const loadTtsSettings = async () => {
     try {
       const config = await invoke('load_tts_settings') as any;
+      console.log('Loaded TTS config from backend:', config);
+      
       if (config) {
         setTtsMode(config.ttsMode || 'normal');
-        setTtsProvider(config.ttsProvider || 'openai');
-        setTtsVoice(config.ttsVoice || 'alloy');
+        setTtsProvider(config.ttsProvider || 'edgetts');
+        setTtsVoice(config.ttsVoice || 'en-US-JennyNeural');
         setSelectedModel(config.selectedModel || '');
         if (config.rvcSettings) {
           setRvcSettings(config.rvcSettings);
         }
-        console.log('TTS settings loaded successfully');
+        console.log('TTS settings loaded successfully:', {
+          mode: config.ttsMode,
+          provider: config.ttsProvider,
+          voice: config.ttsVoice,
+          model: config.selectedModel
+        });
       }
     } catch (error) {
       console.error('Error loading TTS settings:', error);
@@ -291,6 +364,18 @@ export const useSettingsState = () => {
       console.error('Error loading available devices:', error);
       // Fallback to CPU only
       setAvailableDevices([{type: 'cpu', name: 'CPU', id: 'cpu'}]);
+    }
+  }, []);
+
+  // Load security settings
+  const loadSecuritySettings = useCallback(async () => {
+    try {
+      const settings = await invoke('load_security_settings') as {p2p_port: number, only_client_mode: boolean};
+      setP2pPort(settings.p2p_port);
+      setOnlyClientMode(settings.only_client_mode);
+      console.log('Security settings loaded:', settings);
+    } catch (error) {
+      console.error('Error loading security settings:', error);
     }
   }, []);
 
@@ -322,36 +407,72 @@ export const useSettingsState = () => {
 
   // Initialize state on mount
   useEffect(() => {
-    // Load audio devices
+    // Load audio devices - simple approach without permissions
     const loadAudioDevices = async () => {
       try {
-        await navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
-          stream.getTracks().forEach(track => track.stop());
-        });
-
+        // Simple device enumeration without requesting any permissions
         const devices = await navigator.mediaDevices.enumerateDevices();
         const audioOutputs = devices.filter(device => device.kind === 'audiooutput');
-        setOutputDevices(audioOutputs);
+        
+        // Always add a default device
+        const defaultDevice = {
+          deviceId: 'default',
+          kind: 'audiooutput' as const,
+          label: 'Default Audio Output',
+          groupId: ''
+        } as MediaDeviceInfo;
+        
+        if (audioOutputs.length > 0) {
+          // Add default device first, then the detected devices
+          setOutputDevices([defaultDevice, ...audioOutputs]);
+          console.log('Audio output devices loaded successfully:', audioOutputs.length + 1);
+        } else {
+          // Only default device available
+          setOutputDevices([defaultDevice]);
+          console.log('Only default audio device available');
+        }
       } catch (error) {
-        console.error('Error loading audio devices:', error);
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const audioOutputs = devices.filter(device => device.kind === 'audiooutput');
-        setOutputDevices(audioOutputs);
+        console.warn('Could not enumerate audio devices, using default only:', error);
+        // Fallback to just default device
+        setOutputDevices([{
+          deviceId: 'default',
+          kind: 'audiooutput' as const,
+          label: 'Default Audio Output',
+          groupId: ''
+        } as MediaDeviceInfo]);
       }
     };
 
     loadAudioDevices();
     checkTwitchAuthStatus();
     loadTtsSettings();
+    loadAudioSettings();
     loadAvailableModels();
-
-    // Set up periodic auth status checking
-    const authCheckInterval = setInterval(checkTwitchAuthStatus, 5000);
+    loadSecuritySettings();
 
     return () => {
-      clearInterval(authCheckInterval);
+      // No interval to clear on initial mount
     };
   }, []);
+
+  // Set up periodic auth status checking only when on Twitch tab
+  useEffect(() => {
+    let authCheckInterval: number | null = null;
+    
+    if (activeTab === 'twitch') {
+      console.log('SettingsPage: Starting Twitch auth status polling');
+      authCheckInterval = setInterval(checkTwitchAuthStatus, 5000);
+    } else if (authCheckInterval) {
+      console.log('SettingsPage: Stopping Twitch auth status polling');
+      clearInterval(authCheckInterval);
+    }
+
+    return () => {
+      if (authCheckInterval) {
+        clearInterval(authCheckInterval);
+      }
+    };
+  }, [activeTab]);
 
   // Check Python environment status on mount
   useEffect(() => {
@@ -450,6 +571,8 @@ export const useSettingsState = () => {
     setVolume,
     isTestPlaying,
     setIsTestPlaying,
+    saveAudioSettings,
+    loadAudioSettings,
 
     // TTS Settings
     ttsMode,
@@ -472,6 +595,8 @@ export const useSettingsState = () => {
     loadTtsSettings,
     loadAvailableModels,
     loadAvailableDevices,
+    loadSecuritySettings,
+    saveSecuritySettings,
     deleteModel,
 
     // Redemptions
@@ -522,6 +647,10 @@ export const useSettingsState = () => {
     setAutoAccept,
     manualConfirm,
     setManualConfirm,
+    p2pPort,
+    setP2pPort,
+    onlyClientMode,
+    setOnlyClientMode,
 
     // Utility functions
     checkTwitchAuthStatus,

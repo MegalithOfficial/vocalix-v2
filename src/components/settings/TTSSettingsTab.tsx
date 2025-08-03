@@ -1,7 +1,8 @@
 import { motion } from 'framer-motion';
 import { Volume, Sliders, File, X, Play } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { listen } from '@tauri-apps/api/event';
 import { useSettingsState } from '../../hooks/useSettingsState';
 import { logger } from '../../utils/logger';
 
@@ -30,6 +31,28 @@ const TTSSettingsTab = ({ settingsState }: TTSSettingsTabProps) => {
     loadAvailableModels,
     loadAvailableDevices,
   } = settingsState;
+
+  const [ttsBusy, setTtsBusy] = useState(false);
+  const [ttsProgress, setTtsProgress] = useState(0);
+  const [ttsMessage, setTtsMessage] = useState<string>('');
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [lastOutputPath, setLastOutputPath] = useState<string>('');
+
+  // Handle provider change - update voice to default for the provider
+  useEffect(() => {
+    const edgeTTSVoices = ['en-US-JennyNeural', 'en-US-AriaNeural', 'en-US-GuyNeural', 'en-US-DavisNeural'];
+    const openAIVoices = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'];
+
+    if (ttsProvider === 'edgetts') {
+      if (!edgeTTSVoices.includes(ttsVoice)) {
+        setTtsVoice('en-US-JennyNeural');
+      }
+    } else if (ttsProvider === 'openai') {
+      if (!openAIVoices.includes(ttsVoice)) {
+        setTtsVoice('alloy');
+      }
+    }
+  }, [ttsProvider, ttsVoice, setTtsVoice]);
 
   // Handle RVC model file upload
   const handleRvcModelUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -72,7 +95,20 @@ const TTSSettingsTab = ({ settingsState }: TTSSettingsTabProps) => {
       });
       
       // Load devices immediately when RVC mode is selected
-      loadAvailableDevices().catch(error => {
+      loadAvailableDevices().then(() => {
+        // After devices load, if current selected device isn't present, try to fallback
+        const cpuFallback = availableDevices.find((d: any) => d.id === 'cpu');
+        if (availableDevices.length > 0) {
+          const exists = availableDevices.some((d: any) => d.id === rvcSettings.device);
+          if (!exists) {
+            if (cpuFallback) {
+              updateRvcSetting('device', cpuFallback.id);
+            } else {
+              updateRvcSetting('device', availableDevices[0].id);
+            }
+          }
+        }
+      }).catch(error => {
         console.error('Error loading available devices:', error);
       });
     }
@@ -96,6 +132,25 @@ const TTSSettingsTab = ({ settingsState }: TTSSettingsTabProps) => {
       [key]: value
     }));
   };
+
+  useEffect(() => {
+    let unlisten: undefined | (() => void);
+    (async () => {
+      try {
+        unlisten = await listen<{ progress?: number; status?: string }>('tts_status', (e) => {
+          const p = typeof e.payload?.progress === 'number' ? e.payload.progress : undefined;
+          const s = typeof e.payload?.status === 'string' ? e.payload.status : undefined;
+          if (p !== undefined) setTtsProgress(p);
+          if (s) setTtsMessage(s);
+          if (s?.startsWith('error')) setTtsBusy(false);
+          if (s === 'completed') setTtsBusy(false);
+        });
+      } catch (err) {
+        console.error('Failed to listen to tts_status', err);
+      }
+    })();
+    return () => { if (unlisten) unlisten(); };
+  }, []);
 
   return (
     <motion.div
@@ -163,11 +218,8 @@ const TTSSettingsTab = ({ settingsState }: TTSSettingsTabProps) => {
                   onChange={(e) => setTtsProvider(e.target.value)}
                   className="w-full px-4 py-3 bg-gray-700/50 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-orange-500"
                 >
-                  <option value="openai">OpenAI</option>
-                  <option value="elevenlabs">ElevenLabs</option>
-                  <option value="azure">Azure Cognitive Services</option>
-                  <option value="google">Google Cloud TTS</option>
-                  <option value="aws">AWS Polly</option>
+                  <option value="edgetts">Edge-TTS</option>
+                  <option value="openai">OpenAI TTS</option>
                 </select>
               </div>
 
@@ -180,9 +232,23 @@ const TTSSettingsTab = ({ settingsState }: TTSSettingsTabProps) => {
                   onChange={(e) => setTtsVoice(e.target.value)}
                   className="w-full px-4 py-3 bg-gray-700/50 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-orange-500"
                 >
-                  <option value="Joanna">Joanna</option>
-                  <option value="Matthew">Matthew</option>
-                  <option value="Ivy">Ivy</option>
+                  {ttsProvider === 'edgetts' ? (
+                    <>
+                      <option value="en-US-JennyNeural">en-US-JennyNeural</option>
+                      <option value="en-US-AriaNeural">en-US-AriaNeural</option>
+                      <option value="en-US-GuyNeural">en-US-GuyNeural</option>
+                      <option value="en-US-DavisNeural">en-US-DavisNeural</option>
+                    </>
+                  ) : (
+                    <>
+                      <option value="alloy">alloy</option>
+                      <option value="echo">echo</option>
+                      <option value="fable">fable</option>
+                      <option value="onyx">onyx</option>
+                      <option value="nova">nova</option>
+                      <option value="shimmer">shimmer</option>
+                    </>
+                  )}
                 </select>
               </div>
             </div>
@@ -191,20 +257,40 @@ const TTSSettingsTab = ({ settingsState }: TTSSettingsTabProps) => {
             {ttsMode === 'normal' && (
               <div className="flex justify-center pt-4">
                 <motion.button
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
+                  whileHover={!ttsBusy ? { scale: 1.02 } : undefined}
+                  whileTap={!ttsBusy ? { scale: 0.98 } : undefined}
+                  disabled={ttsBusy}
                   onClick={async () => {
+                    setTtsBusy(true);
+                    setTtsProgress(0);
+                    setTtsMessage('Starting...');
                     try {
-                      await invoke('test_tts_normal', {
-                        provider: ttsProvider,
-                        voice: ttsVoice
-                      });
-                      logger.info('TTSSettings', 'Normal TTS test initiated');
+                      const res = await invoke('generate_tts', {
+                        mode: 'normal',
+                        text: 'This is a test of text to speech.',
+                        voice: ttsVoice,
+                        modelFile: null,
+                        device: null,
+                        inferenceRate: null,
+                        filterRadius: null,
+                        resampleRate: null,
+                        protectRate: null,
+                      }) as { path: string; audio_data: string; mime_type: string };
+                      if (audioRef.current) {
+                        const audioBlob = new Blob([
+                          Uint8Array.from(atob(res.audio_data), c => c.charCodeAt(0))
+                        ], { type: res.mime_type });
+                        const audioUrl = URL.createObjectURL(audioBlob);
+                        audioRef.current.src = audioUrl;
+                        setLastOutputPath(audioUrl);
+                        await audioRef.current.play().catch(() => {});
+                      }
                     } catch (error) {
                       console.error('Failed to test Normal TTS:', error);
+                      setTtsBusy(false);
                     }
                   }}
-                  className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors flex items-center space-x-2"
+                  className={`px-6 py-3 rounded-lg font-medium transition-colors flex items-center space-x-2 ${ttsBusy ? 'bg-blue-600/50 cursor-not-allowed text-white' : 'bg-blue-600 hover:bg-blue-700 text-white'}`}
                 >
                   <Play className="w-4 h-4" />
                   <span>Test TTS</span>
@@ -226,6 +312,10 @@ const TTSSettingsTab = ({ settingsState }: TTSSettingsTabProps) => {
                   <Sliders className="w-5 h-5 mr-2 text-orange-400" />
                   Command Arguments
                 </h3>
+                {/* Info warning for first-time RVC run */}
+                <div className="mt-3 p-3 rounded-lg border border-yellow-700/40 bg-yellow-500/10 text-yellow-200 text-sm">
+                  RVC may take longer on the first launch while models and dependencies are prepared. Subsequent runs will be faster.
+                </div>
               </div>
 
               {/* Model File Upload */}
@@ -315,8 +405,8 @@ const TTSSettingsTab = ({ settingsState }: TTSSettingsTabProps) => {
                       onChange={(e) => updateRvcSetting('device', e.target.value)}
                       className="w-full px-4 py-3 bg-gray-700/50 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-orange-500"
                     >
-                      {availableDevices.length > 0 ? ( 
-                        availableDevices.map((device) => (
+                      {availableDevices && availableDevices.length > 0 ? (
+                        availableDevices.map((device: any) => (
                           <option key={device.id} value={device.id}>
                             {device.name} ({device.type})
                           </option>
@@ -396,7 +486,8 @@ const TTSSettingsTab = ({ settingsState }: TTSSettingsTabProps) => {
                   <div className="p-4 bg-gray-700/20 rounded-lg border border-gray-600/30">
                     <h5 className="text-sm font-medium text-white mb-2">Generated Command</h5>
                     <code className="text-xs text-gray-300 bg-gray-800/50 p-2 rounded block overflow-x-auto">
-                      -de {rvcSettings.device} -ir {rvcSettings.inferenceRate} -fr {rvcSettings.filterRadius} -rmr {rvcSettings.resampleRate} -pr {rvcSettings.protectRate}
+                      {rvcSettings.device !== 'cpu' && `-de {rvcSettings.device} `}
+                      -ir {rvcSettings.inferenceRate} -fr {rvcSettings.filterRadius} -rmr {rvcSettings.resampleRate} -pr {rvcSettings.protectRate}
                     </code>
                   </div>
                 </div>
@@ -405,23 +496,40 @@ const TTSSettingsTab = ({ settingsState }: TTSSettingsTabProps) => {
               {/* Test TTS Button for RVC Mode */}
               <div className="flex justify-center pt-6">
                 <motion.button
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
+                  whileHover={!ttsBusy ? { scale: 1.02 } : undefined}
+                  whileTap={!ttsBusy ? { scale: 0.98 } : undefined}
+                  disabled={ttsBusy}
                   onClick={async () => {
+                    setTtsBusy(true);
+                    setTtsProgress(0);
+                    setTtsMessage('Starting...');
                     try {
-                      await invoke('test_tts_rvc', {
-                        device: rvcSettings.device,
-                        inferenceRate: rvcSettings.inferenceRate,
-                        filterRadius: rvcSettings.filterRadius,
-                        resampleRate: rvcSettings.resampleRate,
-                        protectRate: rvcSettings.protectRate
-                      });
-                      logger.info('TTSSettings', 'RVC TTS test initiated');
+                      const res = await invoke('generate_tts', {
+                        mode: 'rvc',
+                        text: 'This is a test of RVC voice conversion.',
+                        voice: 'en-US-JennyNeural',
+                        modelFile: selectedModel || null,
+                        device: rvcSettings.device || null,
+                        inferenceRate: rvcSettings.inferenceRate ?? null,
+                        filterRadius: rvcSettings.filterRadius ?? null,
+                        resampleRate: rvcSettings.resampleRate ?? null,
+                        protectRate: rvcSettings.protectRate ?? null,
+                      }) as { path: string; audio_data: string; mime_type: string };
+                      if (audioRef.current) {
+                        const audioBlob = new Blob([
+                          Uint8Array.from(atob(res.audio_data), c => c.charCodeAt(0))
+                        ], { type: res.mime_type });
+                        const audioUrl = URL.createObjectURL(audioBlob);
+                        audioRef.current.src = audioUrl;
+                        setLastOutputPath(audioUrl);
+                        await audioRef.current.play().catch(() => {});
+                      }
                     } catch (error) {
                       console.error('Failed to test RVC TTS:', error);
+                      setTtsBusy(false);
                     }
                   }}
-                  className="px-6 py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-medium transition-colors flex items-center space-x-2"
+                  className={`px-6 py-3 rounded-lg font-medium transition-colors flex items-center space-x-2 ${ttsBusy ? 'bg-purple-600/50 cursor-not-allowed text-white' : 'bg-purple-600 hover:bg-purple-700 text-white'}`}
                 >
                   <Play className="w-4 h-4" />
                   <span>Test TTS</span>
@@ -443,6 +551,32 @@ const TTSSettingsTab = ({ settingsState }: TTSSettingsTabProps) => {
           </div>
         </div>
       </div>
+
+      {/* Inline TTS progress & player */}
+      {(ttsBusy || lastOutputPath) && (
+        <div className="mt-4 p-4 rounded-xl border border-gray-700 bg-gray-800/60">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex-1">
+              <div className="text-sm text-gray-300 mb-2">{ttsMessage || (ttsBusy ? 'Processing...' : 'Ready')}</div>
+              <div className="w-full h-2 bg-gray-700 rounded">
+                <div className={`h-2 rounded ${ttsBusy ? 'bg-orange-500 animate-pulse' : 'bg-green-500'}`} style={{ width: `${ttsBusy ? Math.max(10, ttsProgress) : 100}%`, transition: 'width 150ms ease-out' }} />
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <audio ref={audioRef} controls className="h-8" src={lastOutputPath || undefined} />
+              {lastOutputPath && (
+                <button
+                  onClick={() => setLastOutputPath('')}
+                  className="px-2 py-1 text-xs rounded bg-gray-700 hover:bg-gray-600 text-gray-200"
+                  title="Clear output"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </motion.div>
   );
 };
