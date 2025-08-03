@@ -73,15 +73,14 @@ const ServerPage = () => {
         getNetworkInfo();
       } else if (message.includes('Accepted connection')) {
         setConnectedClients(prev => prev + 1);
-      } else if (message.includes('New peer')) {
+      } else if (
+        message.includes('New peer') ||
+        message.includes('Known peer found') ||
+        message.includes('Authentication successful') ||
+        message.toLowerCase().includes('both peers confirmed')
+      ) {
+        // Keep UI in pairing until final SUCCESS is received
         setConnectionStatus('pairing');
-      } else if (message.includes('Known peer found')) {
-        setConnectionStatus('pairing');
-        setStatusMessage('Authenticating known peer...');
-      } else if (message.includes('Authentication successful')) {
-        setStatusMessage('Setting up secure session...');
-      } else if (message.includes('Both peers confirmed')) {
-        setStatusMessage('Establishing encrypted channel...');
       }
     });
 
@@ -96,7 +95,7 @@ const ServerPage = () => {
       setStatusMessage('Please verify the 6-digit code with your client');
     });
 
-    // Listen for successful connection
+    // Listen for successful connection - only this should set connected
     const unlistenSuccess = listen('SUCCESS', (event) => {
       if (!mounted) return;
       
@@ -183,7 +182,9 @@ const ServerPage = () => {
   const handleConfirmPairing = async () => {
     try {
       await invoke('user_confirm_pairing');
-      setStatusMessage('Pairing confirmed! Waiting for peer confirmation...');
+      // Keep in pairing state and inform operator that we're waiting on the client
+      setConnectionStatus('pairing');
+      setStatusMessage('Pairing confirmed locally. Waiting for the client to confirm...');
     } catch (error) {
       console.error('Failed to confirm pairing:', error);
       setError(`Failed to confirm pairing: ${error}`);
@@ -303,6 +304,7 @@ const ServerPage = () => {
                     >
                       Confirm Pairing
                     </motion.button>
+                    <p className="text-gray-300 text-xs mt-3">After confirming, please wait for the client. The connection will complete automatically once both sides confirm.</p>
                   </div>
                 )}
               </div>

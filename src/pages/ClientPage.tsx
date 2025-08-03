@@ -28,11 +28,17 @@ const ClientPage = () => {
          setStatusMessage(message);
          addLog('info', message);
          
+         // Do not mark connected on intermediate pairing/authentication states
          if (message.includes('Connecting to')) {
             setConnectionState('connecting');
-         } else if (message.includes('New peer') || message.includes('Known peer found')) {
-            setConnectionState('pairing');
-         } else if (message.includes('Challenge received') || message.includes('Authentication')) {
+         } else if (
+            message.includes('New peer') ||
+            message.includes('Known peer found') ||
+            message.includes('Challenge received') ||
+            message.includes('Authentication') ||
+            message.toLowerCase().includes('both peers confirmed')
+         ) {
+            // Stay in pairing until SUCCESS event confirms secure channel
             setConnectionState('pairing');
          }
       });
@@ -46,7 +52,7 @@ const ClientPage = () => {
          addLog('info', `Pairing code: ${code}`);
       });
 
-      // Listen for successful connection
+      // Listen for successful connection - only this should transition to connected
       const unlistenSuccess = listen('SUCCESS', (event) => {
          const message = event.payload as string;
          console.log('Connection success:', message);
@@ -102,7 +108,10 @@ const ClientPage = () => {
    const handleConfirmPairing = async () => {
       try {
          await invoke('user_confirm_pairing');
-         addLog('info', 'Pairing confirmed! Waiting for server confirmation...');
+         // Stay in pairing and inform user we're waiting for the other side
+         setConnectionState('pairing');
+         addLog('info', 'Pairing confirmed locally. Waiting for the other side to confirm...');
+         setStatusMessage('Waiting for the other side to confirm...');
       } catch (error) {
          console.error('Failed to confirm pairing:', error);
          setError(`Failed to confirm pairing: ${error}`);
@@ -196,6 +205,10 @@ const ClientPage = () => {
                         >
                            Confirm Pairing
                         </motion.button>
+                        {/* Extra hint to prevent confusion after local confirm */}
+                        {connectionState === 'pairing' && (
+                           <p className="text-yellow-200 text-xs mt-3">After confirming, please wait for the other side. The connection will complete automatically once both sides confirm.</p>
+                        )}
                      </div>
                   )}
 
