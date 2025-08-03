@@ -32,6 +32,14 @@ const ServerPage = () => {
   const [pairingCode, setPairingCode] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState('');
 
+  // Server logs state
+  const [serverLogs, setServerLogs] = useState<Array<{type: 'info' | 'error' | 'success', message: string, timestamp: string}>>([]);
+
+  const addServerLog = (type: 'info' | 'error' | 'success', message: string) => {
+    const timestamp = new Date().toLocaleTimeString();
+    setServerLogs(prev => [...prev.slice(-9), { type, message, timestamp }]); // Keep last 10 logs
+  };
+
   useEffect(() => {
     let mounted = true;
     let serverInitialized = false;
@@ -127,12 +135,22 @@ const ServerPage = () => {
       setPairingCode(null);
     });
 
+    // Listen for Twitch redemptions
+    const unlistenTwitchRedemption = listen('TWITCH_CHANNEL_POINTS_REDEMPTION', (event) => {
+      if (!mounted) return;
+      
+      const redemptionData = event.payload as any;
+      console.log('Twitch redemption received:', redemptionData);
+      addServerLog('info', `Redemption: ${redemptionData.user_name} redeemed "${redemptionData.reward_title}" (${redemptionData.reward_cost} points)`);
+    });
+
     return () => {
       mounted = false;
       unlistenStatus.then(f => f());
       unlistenPairing.then(f => f());
       unlistenSuccess.then(f => f());
       unlistenError.then(f => f());
+      unlistenTwitchRedemption.then(f => f());
     };
   }, []); // Empty dependency array to run only once
 
@@ -441,6 +459,19 @@ const ServerPage = () => {
                     {connectedClients > 0 && (
                       <div className="text-cyan-400">[INFO] {connectedClients} client(s) connected</div>
                     )}
+                    {/* Dynamic server logs */}
+                    {serverLogs.map((log, index) => (
+                      <div 
+                        key={index}
+                        className={`${
+                          log.type === 'error' ? 'text-red-400' :
+                          log.type === 'success' ? 'text-green-400' :
+                          'text-yellow-400'
+                        }`}
+                      >
+                        [{log.timestamp}] {log.message}
+                      </div>
+                    ))}
                   </div>
                 ) : (
                   <div className="text-gray-500 italic">Server is offline. Start the server to see logs.</div>

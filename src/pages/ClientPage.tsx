@@ -6,7 +6,6 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
 const ClientPage = () => {
-   const [isConnected, setIsConnected] = useState(false);
    const [serverAddress, setServerAddress] = useState('');
    const [isConnecting, setIsConnecting] = useState(false);
    const [isMuted, setIsMuted] = useState(false);
@@ -59,7 +58,6 @@ const ClientPage = () => {
          addLog('success', message);
          
          if (message.includes('Secure encrypted channel established')) {
-            setIsConnected(true);
             setConnectionState('connected');
             setIsConnecting(false);
             setPairingCode(null);
@@ -120,7 +118,6 @@ const ClientPage = () => {
    };
 
    const handleDisconnect = () => {
-      setIsConnected(false);
       setIsMuted(false);
       setConnectionState('disconnected');
       setError(null);
