@@ -37,18 +37,14 @@ class Logger {
       message
     };
 
-    // Add to buffer
     this.logBuffer.push(logEntry);
     
-    // Keep only the last maxLogs entries
     if (this.logBuffer.length > this.maxLogs) {
       this.logBuffer = this.logBuffer.slice(-this.maxLogs);
     }
 
-    // Notify listeners
     this.listeners.forEach(listener => listener([...this.logBuffer]));
 
-    // Write to backend
     this.writeToBackend(level, component, message);
   }
 
@@ -72,7 +68,6 @@ class Logger {
     this.addLogEntry('error', component, message);
   }
 
-  // For replacing console.log calls
   log(component: string, message: string) {
     console.log(`[${component}] ${message}`);
     this.addLogEntry('info', component, message);
@@ -116,10 +111,8 @@ class Logger {
   }
 }
 
-// Create global logger instance
 export const logger = Logger.getInstance();
 
-// Convenience functions for easy migration from console.log
 export const logDebug = (component: string, message: string) => logger.debug(component, message);
 export const logInfo = (component: string, message: string) => logger.info(component, message);
 export const logWarn = (component: string, message: string) => logger.warn(component, message);

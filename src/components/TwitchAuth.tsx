@@ -25,7 +25,6 @@ export function TwitchAuth({ onAuthSuccess, onAuthError, clientId, clientSecret 
   const [timeRemaining, setTimeRemaining] = useState<number | null>(null);
 
   useEffect(() => {
-    // Listen for device code instructions
     const unlistenDeviceCode = listen('TWITCH_DEVICE_CODE', (event) => {
       try {
         const deviceCodeInfo = event.payload as any;
@@ -69,7 +68,6 @@ export function TwitchAuth({ onAuthSuccess, onAuthError, clientId, clientSecret 
     };
   }, [onAuthSuccess, onAuthError]);
 
-  // Countdown timer
   useEffect(() => {
     if (timeRemaining === null || timeRemaining <= 0) return;
 

@@ -64,7 +64,6 @@ fn main() {
                     eprintln!("Failed to create logs directory: {}", e);
                 }
             }
-            // Emit only-client-mode once on boot; failure is non-fatal
             #[allow(unused_variables)]
             {
                 if let Ok(store) = app.store("settings.json") {
@@ -83,7 +82,10 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::p2p::get_connection_status,
+            commands::p2p::check_client_connection,
             commands::p2p::start_listener,
+            commands::p2p::stop_listener,
             commands::p2p::start_initiator,
             commands::p2p::user_confirm_pairing,
             commands::p2p::send_chat_message,

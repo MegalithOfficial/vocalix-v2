@@ -1,7 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-// --- Logging Macros (defined early for use throughout) ---
-// Logging macro for internal use
 #[macro_export]
 macro_rules! app_log {
     ($level:expr, $component:expr, $($arg:tt)*) => {
@@ -9,7 +7,6 @@ macro_rules! app_log {
             let message = format!($($arg)*);
             let timestamp = chrono::Utc::now().to_rfc3339();
 
-            // Print to console
             match $level {
                 "debug" => println!("[{}] [DEBUG] [{}] {}", timestamp, $component, message),
                 "info" => println!("[{}] [INFO] [{}] {}", timestamp, $component, message),
@@ -18,8 +15,6 @@ macro_rules! app_log {
                 _ => println!("[{}] [{}] [{}] {}", timestamp, $level.to_uppercase(), $component, message),
             }
 
-            // Write to file asynchronously (best effort)
-            // Note: The log file path will be updated in setup() to use app data directory
             let log_file_path = "logs/vocalix.log".to_string();
             let log_line = format!(
                 "[{}] [{}] [{}] {}\n",
@@ -34,7 +29,6 @@ macro_rules! app_log {
                 use std::io::Write;
                 use std::path::Path;
 
-                // Create logs directory if it doesn't exist
                 if let Some(parent) = Path::new(&log_file_path).parent() {
                     let _ = create_dir_all(parent);
                 }
@@ -52,7 +46,6 @@ macro_rules! app_log {
     };
 }
 
-// Convenience macros
 #[macro_export]
 macro_rules! log_debug { ($component:expr, $($arg:tt)*) => { crate::app_log!("debug", $component, $($arg)*); }; }
 #[macro_export]
@@ -62,7 +55,6 @@ macro_rules! log_warn { ($component:expr, $($arg:tt)*) => { crate::app_log!("war
 #[macro_export]
 macro_rules! log_error { ($component:expr, $($arg:tt)*) => { crate::app_log!("error", $component, $($arg)*); }; }
 
-// --- Logging Types ---
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LogEntry {
     pub timestamp: String,

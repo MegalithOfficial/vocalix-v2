@@ -2,7 +2,7 @@ use tauri::{command, AppHandle};
 use tauri_plugin_store::StoreExt;
 use serde::{Deserialize, Serialize};
 use local_ip_address::local_ip;
-use crate::{log_error, log_info};
+use crate::log_info;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NetworkInfo {
@@ -21,7 +21,6 @@ pub fn get_lan_ip() -> Result<String, String> {
         },
         Err(e) => {
             log_info!("NetworkInfo", "Failed to get local IP: {}, using fallback", e);
-            // Fallback to localhost if detection fails
             Ok("127.0.0.1".to_string())
         }
     }
@@ -31,7 +30,6 @@ pub fn get_lan_ip() -> Result<String, String> {
 pub fn get_network_info(app: AppHandle) -> Result<NetworkInfo, String> {
     let lan_ip = get_lan_ip()?;
     
-    // Read port from settings.json, default to 12345 if not found
     let port = if let Ok(store) = app.store("settings.json") {
         match store.get("settings") {
             Some(settings) => match settings.get("server_port") {
@@ -47,6 +45,6 @@ pub fn get_network_info(app: AppHandle) -> Result<NetworkInfo, String> {
     Ok(NetworkInfo {
         lan_ip,
         port,
-        is_running: false, // Status is managed by p2p system
+        is_running: false, 
     })
 }

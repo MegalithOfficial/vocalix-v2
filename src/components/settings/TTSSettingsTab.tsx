@@ -38,7 +38,6 @@ const TTSSettingsTab = ({ settingsState }: TTSSettingsTabProps) => {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [lastOutputPath, setLastOutputPath] = useState<string>('');
 
-  // Handle provider change - update voice to default for the provider
   useEffect(() => {
     const edgeTTSVoices = ['en-US-JennyNeural', 'en-US-AriaNeural', 'en-US-GuyNeural', 'en-US-DavisNeural'];
     const openAIVoices = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'];
@@ -54,7 +53,6 @@ const TTSSettingsTab = ({ settingsState }: TTSSettingsTabProps) => {
     }
   }, [ttsProvider, ttsVoice, setTtsVoice]);
 
-  // Handle RVC model file upload
   const handleRvcModelUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file && file.name.endsWith('.pth')) {
@@ -69,10 +67,8 @@ const TTSSettingsTab = ({ settingsState }: TTSSettingsTabProps) => {
         setRvcModelFile(file);
         logger.info('TTSSettings', `Model file saved: pythonenv/models/${file.name}`);
         
-        // Refresh the available models list
         await loadAvailableModels();
         
-        // Auto-select the newly uploaded model
         setSelectedModel(file.name);
       } catch (error) {
         console.error('Error saving model file:', error);
@@ -82,21 +78,16 @@ const TTSSettingsTab = ({ settingsState }: TTSSettingsTabProps) => {
       alert('Please select a valid .pth model file');
     }
     
-    // Clear the input so the same file can be uploaded again if needed
     event.target.value = '';
   };
 
-  // Load available models and devices when RVC mode is selected
   useEffect(() => {
     if (ttsMode === 'rvc') {
-      // Load models
       loadAvailableModels().catch(error => {
         console.error('Error loading available models:', error);
       });
       
-      // Load devices immediately when RVC mode is selected
       loadAvailableDevices().then(() => {
-        // After devices load, if current selected device isn't present, try to fallback
         const cpuFallback = availableDevices.find((d: any) => d.id === 'cpu');
         if (availableDevices.length > 0) {
           const exists = availableDevices.some((d: any) => d.id === rvcSettings.device);
@@ -112,20 +103,16 @@ const TTSSettingsTab = ({ settingsState }: TTSSettingsTabProps) => {
         console.error('Error loading available devices:', error);
       });
     }
-  }, [ttsMode]); // Only depend on ttsMode to prevent infinite loops
+  }, [ttsMode]); 
 
-  // Sync rvcModelFile when selectedModel changes
   useEffect(() => {
     if (selectedModel && rvcModelFile?.name !== selectedModel) {
-      // If a different model is selected, clear the rvcModelFile since it represents
-      // the currently uploaded file, not the selected saved model
       if (rvcModelFile && rvcModelFile.name !== selectedModel) {
         setRvcModelFile(null);
       }
     }
   }, [selectedModel, rvcModelFile]);
 
-  // Update RVC setting
   const updateRvcSetting = (key: keyof typeof rvcSettings, value: number | boolean | string) => {
     setRvcSettings(prev => ({
       ...prev,
@@ -353,7 +340,6 @@ const TTSSettingsTab = ({ settingsState }: TTSSettingsTabProps) => {
                       <button
                         onClick={() => {
                           setRvcModelFile(null);
-                          // If this model is currently selected, clear the selection
                           if (selectedModel === rvcModelFile?.name) {
                             setSelectedModel('');
                           }

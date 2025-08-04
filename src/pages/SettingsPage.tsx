@@ -5,7 +5,6 @@ import { Link } from 'react-router-dom';
 import { useSettingsState } from '../hooks/useSettingsState';
 import { SettingsTab } from '../types/settings';
 
-// Import tab components
 import TwitchSettingsTab from '../components/settings/TwitchSettingsTab';
 import AudioSettingsTab from '../components/settings/AudioSettingsTab';
 import TTSSettingsTab from '../components/settings/TTSSettingsTab';
@@ -27,12 +26,10 @@ const SettingsPage = () => {
         { id: 'logs' as SettingsTab, label: 'Application Logs', icon: FileText, color: 'red', serverOnly: false },
     ];
 
-    // Derive the visible tabs based on onlyClientMode
     const visibleTabs = useMemo(() => {
         return tabs.filter(t => !(onlyClientMode && t.serverOnly));
     }, [onlyClientMode]);
 
-    // Ensure activeTab is always a visible tab when onlyClientMode changes
     useEffect(() => {
         const stillVisible = visibleTabs.some(t => t.id === activeTab);
         if (!stillVisible && visibleTabs.length > 0) {
@@ -61,7 +58,7 @@ const SettingsPage = () => {
 
     return (
         <div className="min-h-screen bg-gradient-to-br from-gray-900 via-black to-gray-900 flex">
-            {/* Sidebar with tabs */}
+            {/* Sidebar */}
             <div className="w-80 bg-gray-900/50 border-r border-gray-800 flex flex-col">
                 {/* Header */}
                 <div className="p-6 border-b border-gray-800">

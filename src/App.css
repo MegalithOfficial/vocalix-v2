@@ -7,10 +7,9 @@ body {
     sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  overflow-x: hidden; /* Prevent horizontal scrollbar globally */
+  overflow-x: hidden; 
 }
 
-/* Prevent horizontal overflow on the root element */
 html {
   overflow-x: hidden;
 }

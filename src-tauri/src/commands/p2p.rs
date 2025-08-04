@@ -1,7 +1,24 @@
 use crate::services::p2p::handle_connection;
 use crate::state::{AppStateWithChannel, Message};
-use tauri::{Emitter, State, Window};
+use tauri::{Emitter, State, Window, Manager, AppHandle};
 use tokio::net::{TcpListener, TcpStream};
+use std::fs;
+
+#[tauri::command]
+pub async fn get_connection_status(
+    state: State<'_, AppStateWithChannel>,
+) -> Result<bool, String> {
+    let message_tx = state.message_tx.lock().await;
+    Ok(message_tx.is_some())
+}
+
+#[tauri::command]
+pub async fn check_client_connection(
+    state: State<'_, AppStateWithChannel>,
+) -> Result<bool, String> {
+    let message_tx = state.message_tx.lock().await;
+    Ok(message_tx.is_some())
+}
 
 #[tauri::command]
 pub async fn start_listener(
@@ -94,18 +111,29 @@ pub async fn send_chat_message(
 
 #[tauri::command]
 pub async fn send_redemption_without_timer(
-    audio: Vec<u8>,
+    file_path: String,
     title: String,
     content: String,
+    app: AppHandle,
     state: State<'_, AppStateWithChannel>,
 ) -> Result<(), String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data directory: {}", e))?;
+    
+    let full_path = app_data_dir.join(&file_path);
+    
+    let audio_data = fs::read(&full_path)
+        .map_err(|e| format!("Failed to read audio file {}: {}", full_path.display(), e))?;
+
     let message_tx = state.message_tx.lock().await;
     if let Some(tx) = message_tx.as_ref() {
         let redemption_msg = Message::RedemptionMessage {
-            audio,
+            audio: audio_data,
             title,
             content,
-            message_type: 0, // redemption-without-timer
+            message_type: 0, 
             time: None,
         };
         let serialized = serde_json::to_string(&redemption_msg)
@@ -120,19 +148,30 @@ pub async fn send_redemption_without_timer(
 
 #[tauri::command]
 pub async fn send_redemption_with_timer(
-    audio: Vec<u8>,
+    file_path: String,
     title: String,
     content: String,
     time: u32,
+    app: AppHandle,
     state: State<'_, AppStateWithChannel>,
 ) -> Result<(), String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data directory: {}", e))?;
+    
+    let full_path = app_data_dir.join(&file_path);
+    
+    let audio_data = fs::read(&full_path)
+        .map_err(|e| format!("Failed to read audio file {}: {}", full_path.display(), e))?;
+
     let message_tx = state.message_tx.lock().await;
     if let Some(tx) = message_tx.as_ref() {
         let redemption_msg = Message::RedemptionMessage {
-            audio,
+            audio: audio_data,
             title,
             content,
-            message_type: 1, // redemption-with-timer
+            message_type: 1, 
             time: Some(time),
         };
         let serialized = serde_json::to_string(&redemption_msg)
@@ -143,4 +182,35 @@ pub async fn send_redemption_with_timer(
     } else {
         Err("No active connection".to_string())
     }
+}
+
+#[tauri::command]
+pub async fn stop_listener(
+    window: Window,
+    state: State<'_, AppStateWithChannel>,
+) -> Result<(), String> {
+    window
+        .emit("STATUS_UPDATE", "Stopping server...")
+        .unwrap();
+    
+    let message_tx = state.message_tx.lock().await;
+    if let Some(tx) = message_tx.as_ref() {
+        let shutdown_msg = Message::PlaintextMessage("Server shutting down".to_string());
+        let serialized = serde_json::to_string(&shutdown_msg)
+            .map_err(|e| format!("Failed to serialize shutdown message: {}", e))?;
+        
+        if let Err(e) = tx.send(serialized) {
+            println!("Failed to send shutdown message to client: {}", e);
+        }
+    }
+    
+    window
+        .emit("STATUS_UPDATE", "Server stopped")
+        .unwrap();
+    
+    window
+        .emit("SERVER_STOPPED", ())
+        .unwrap();
+        
+    Ok(())
 }

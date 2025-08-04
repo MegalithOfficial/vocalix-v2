@@ -32,7 +32,6 @@ const ConnectingEventSub = () => {
         setError(errorMessage);
       }
 
-      // Stop the EventSub listener and disconnect
       try {
         await invoke('twitch_stop_event_listener');
         logger.info('ConnectingEventSub', 'EventSub listener stopped due to error');
@@ -42,7 +41,6 @@ const ConnectingEventSub = () => {
         logger.error('ConnectingEventSub', `Failed to stop EventSub listener: ${stopError}`);
       }
 
-      // Clean up all listeners
       try {
         if (unlistenStatus) unlistenStatus.then(f => f());
         if (unlistenError) unlistenError.then(f => f());
@@ -56,24 +54,18 @@ const ConnectingEventSub = () => {
 
     const initializeEventSub = async () => {
       try {
-        // Get user info first
         const user = await invoke('twitch_get_user_info');
         if (!mounted) return;
         setUserInfo(user);
 
-        // Step 1: Start EventSub connection
         setCurrentStep(0);
         if (!mounted) return;
 
         await invoke('twitch_start_event_listener');
         if (!mounted) return;
         
-        // Step 2: Setting up subscriptions (automatically progresses when backend emits status)
         setCurrentStep(1);
         if (!mounted) return;
-
-        // Step 3: Ready (will be set by event listeners)
-        // The backend should emit events to indicate completion
         
       } catch (error) {
         console.error('EventSub initialization failed:', error);
@@ -81,7 +73,6 @@ const ConnectingEventSub = () => {
       }
     };
 
-    // Listen for EventSub events
     unlistenStatus = listen('STATUS_UPDATE', (event) => {
       logger.info('ConnectingEventSub', `Status update: ${event.payload}`);
       const payload = event.payload as string;
@@ -90,15 +81,14 @@ const ConnectingEventSub = () => {
           payload.includes('WebSocket session established') ||
           payload.includes('EventSub connected') || 
           payload.includes('Subscriptions created')) {
-        setCurrentStep(2); // Mark as ready
-        // Navigate to server page after successful connection
+        setCurrentStep(2); 
         setTimeout(() => {
           if (mounted) {
             navigate('/server');
           }
-        }, 1500); // Brief delay to show completion
+        }, 1500); 
       } else if (payload.includes('Connection state changed: Connecting')) {
-        setCurrentStep(1); // Show subscribing step when connecting
+        setCurrentStep(1); 
       }
     });
 
@@ -109,12 +99,10 @@ const ConnectingEventSub = () => {
       await handleError(errorMessage);
     });
 
-    // Listen for successful EventSub connection
     unlistenEventSubConnected = listen('EVENTSUB_CONNECTED', () => {
       logger.info('ConnectingEventSub', 'EventSub connection established');
       if (mounted) {
         setCurrentStep(2);
-        // Navigate after a brief moment to show success
         setTimeout(() => {
           if (mounted) {
             navigate('/server');
@@ -150,7 +138,6 @@ const ConnectingEventSub = () => {
     } catch (error) {
       console.error('Failed to stop event listener:', error);
     }
-    // Force a full component remount to ensure clean state
     window.location.reload();
   };
 

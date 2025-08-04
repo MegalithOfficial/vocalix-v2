@@ -17,7 +17,6 @@ const LogsSettingsTab: React.FC = () => {
   const logsEndRef = useRef<HTMLDivElement>(null);
   const logsContainerRef = useRef<HTMLDivElement>(null);
 
-  // Load logs on component mount
   useEffect(() => {
     const loadLogs = async () => {
       setIsLoading(true);
@@ -33,7 +32,6 @@ const LogsSettingsTab: React.FC = () => {
     
     loadLogs();
 
-    // Subscribe to log updates
     const unsubscribe = logger.addListener((newLogs) => {
       setLogs(newLogs);
     });
@@ -41,21 +39,17 @@ const LogsSettingsTab: React.FC = () => {
     return unsubscribe;
   }, []);
 
-  // Filter logs based on level and search query
   useEffect(() => {
     let filtered = logs;
 
-    // Filter by log level
     if (filterLevel !== 'all') {
       filtered = filtered.filter(log => log.level === filterLevel);
     }
 
-    // Filter out debug logs if disabled
     if (!showDebugLogs) {
       filtered = filtered.filter(log => log.level !== 'debug');
     }
 
-    // Filter by search query
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase();
       filtered = filtered.filter(log => 
@@ -67,7 +61,6 @@ const LogsSettingsTab: React.FC = () => {
     setFilteredLogs(filtered);
   }, [logs, filterLevel, searchQuery, showDebugLogs]);
 
-  // Auto-scroll to bottom when new logs arrive
   useEffect(() => {
     if (autoScroll && logsEndRef.current) {
       logsEndRef.current.scrollIntoView({ behavior: 'smooth' });

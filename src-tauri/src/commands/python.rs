@@ -630,13 +630,11 @@ devices.append({'type':'cpu','name':'CPU','id':'cpu'}); print(json.dumps(devices
     fs::write(&temp_script, script_content)
         .map_err(|e| format!("Failed to write temporary script: {}", e))?;
 
-    // Execute the script
     let output = Command::new(&python_path)
         .arg(&temp_script)
         .output()
         .map_err(|e| format!("Failed to execute device check script: {}", e))?;
 
-    // Clean up the temporary file
     let _ = fs::remove_file(&temp_script);
 
     if output.status.success() {
@@ -653,14 +651,12 @@ devices.append({'type':'cpu','name':'CPU','id':'cpu'}); print(json.dumps(devices
 
 #[tauri::command]
 pub async fn install_dependencies() -> Result<(), String> {
-    // TODO: Implement dependency installation
     println!("Installing dependencies...");
     Ok(())
 }
 
 #[tauri::command]
 pub async fn download_models() -> Result<(), String> {
-    // TODO: Implement model downloading
     println!("Downloading models...");
     Ok(())
 }
@@ -677,7 +673,6 @@ pub async fn force_reinstall_libraries(
         "Force reinstalling Python libraries..."
     );
 
-    // Get app data directory
     let app_data_dir = app
         .path()
         .app_data_dir()
@@ -691,14 +686,12 @@ pub async fn force_reinstall_libraries(
         );
     }
 
-    // Determine pip path
     let pip_path = if cfg!(windows) {
         pythonenv_path.join("Scripts").join("pip.exe")
     } else {
         pythonenv_path.join("bin").join("pip")
     };
 
-    // Emit progress updates
     let _ = window.emit(
         "PYTHON_SETUP_PROGRESS",
         serde_json::json!({
@@ -707,10 +700,9 @@ pub async fn force_reinstall_libraries(
         }),
     );
 
-    // Uninstall existing packages
-    let packages = ["edge-tts", "rvc-python"];
+    let packages = ["edge-tts", "rvc-python", "torch", "torchaudio"];
     for (i, package) in packages.iter().enumerate() {
-        let progress = 10 + (i as i32 * 20);
+        let progress = 10 + (i as i32 * 10);
         let _ = window.emit(
             "PYTHON_SETUP_PROGRESS",
             serde_json::json!({
@@ -733,7 +725,6 @@ pub async fn force_reinstall_libraries(
         }
     }
 
-    // Clear pip cache
     let _ = window.emit(
         "PYTHON_SETUP_PROGRESS",
         serde_json::json!({
@@ -744,34 +735,83 @@ pub async fn force_reinstall_libraries(
 
     let _ = Command::new(&pip_path).args(["cache", "purge"]).output();
 
-    // Reinstall packages
-    for (i, package) in packages.iter().enumerate() {
-        let progress = 60 + (i as i32 * 20);
-        let _ = window.emit(
-            "PYTHON_SETUP_PROGRESS",
-            serde_json::json!({
-                "progress": progress,
-                "status": format!("Installing {}...", package)
-            }),
-        );
+    let _ = window.emit(
+        "PYTHON_SETUP_PROGRESS",
+        serde_json::json!({
+            "progress": 60,
+            "status": "Installing edge-tts..."
+        }),
+    );
 
-        let install_result = Command::new(&pip_path)
-            .args(["install", "--force-reinstall", "--no-cache-dir", package])
-            .output();
+    let install_result = Command::new(&pip_path)
+        .args(["install", "--force-reinstall", "--no-cache-dir", "edge-tts"])
+        .output();
 
-        match install_result {
-            Ok(output) => {
-                if !output.status.success() {
-                    let error_output = String::from_utf8_lossy(&output.stderr);
-                    return Err(format!("Failed to install {}: {}", package, error_output));
-                }
+    match install_result {
+        Ok(output) => {
+            if !output.status.success() {
+                let error_output = String::from_utf8_lossy(&output.stderr);
+                return Err(format!("Failed to install edge-tts: {}", error_output));
             }
-            Err(e) => {
-                return Err(format!(
-                    "Failed to execute pip install for {}: {}",
-                    package, e
-                ));
+        }
+        Err(e) => {
+            return Err(format!("Failed to execute pip install for edge-tts: {}", e));
+        }
+    }
+
+    let _ = window.emit(
+        "PYTHON_SETUP_PROGRESS",
+        serde_json::json!({
+            "progress": 70,
+            "status": "Installing PyTorch with CUDA 118 support..."
+        }),
+    );
+
+    let torch_install = Command::new(&pip_path)
+        .args([
+            "install",
+            "--force-reinstall",
+            "--no-cache-dir",
+            "torch==2.1.1+cu118",
+            "torchaudio==2.1.1+cu118",
+            "--index-url",
+            "https://download.pytorch.org/whl/cu118",
+        ])
+        .output();
+
+    match torch_install {
+        Ok(output) => {
+            if !output.status.success() {
+                let error_output = String::from_utf8_lossy(&output.stderr);
+                return Err(format!("Failed to install PyTorch: {}", error_output));
             }
+        }
+        Err(e) => {
+            return Err(format!("Failed to execute pip install for PyTorch: {}", e));
+        }
+    }
+
+    let _ = window.emit(
+        "PYTHON_SETUP_PROGRESS",
+        serde_json::json!({
+            "progress": 90,
+            "status": "Installing rvc-python..."
+        }),
+    );
+
+    let install_result = Command::new(&pip_path)
+        .args(["install", "--force-reinstall", "--no-cache-dir", "rvc-python"])
+        .output();
+
+    match install_result {
+        Ok(output) => {
+            if !output.status.success() {
+                let error_output = String::from_utf8_lossy(&output.stderr);
+                return Err(format!("Failed to install rvc-python: {}", error_output));
+            }
+        }
+        Err(e) => {
+            return Err(format!("Failed to execute pip install for rvc-python: {}", e));
         }
     }
 
@@ -811,7 +851,6 @@ pub async fn reset_python_environment(
         }),
     );
 
-    // Remove existing virtual environment
     if pythonenv_path.exists() {
         if let Err(e) = fs::remove_dir_all(&pythonenv_path) {
             return Err(format!("Failed to remove existing environment: {}", e));
@@ -826,7 +865,6 @@ pub async fn reset_python_environment(
         }),
     );
 
-    // Create fresh virtual environment
     let python_command = if cfg!(windows) { "python" } else { "python3" };
     let venv_result = Command::new(python_command)
         .args(["-m", "venv", pythonenv_path.to_str().unwrap()])
@@ -847,40 +885,81 @@ pub async fn reset_python_environment(
         }
     }
 
-    // Set up pip path for package installation
     let pip_path = if cfg!(windows) {
         pythonenv_path.join("Scripts").join("pip.exe")
     } else {
         pythonenv_path.join("bin").join("pip")
     };
 
-    // Install required packages
-    let packages = ["edge-tts", "rvc-python"];
-    for (i, package) in packages.iter().enumerate() {
-        let progress = 60 + (i as i32 * 20);
-        let _ = window.emit(
-            "PYTHON_SETUP_PROGRESS",
-            serde_json::json!({
-                "progress": progress,
-                "status": format!("Installing {}...", package)
-            }),
-        );
+    let _ = window.emit(
+        "PYTHON_SETUP_PROGRESS",
+        serde_json::json!({
+            "progress": 50,
+            "status": "Installing edge-tts..."
+        }),
+    );
 
-        let install_result = Command::new(&pip_path).args(["install", package]).output();
+    let install_result = Command::new(&pip_path).args(["install", "edge-tts"]).output();
+    match install_result {
+        Ok(output) => {
+            if !output.status.success() {
+                let error_output = String::from_utf8_lossy(&output.stderr);
+                return Err(format!("Failed to install edge-tts: {}", error_output));
+            }
+        }
+        Err(e) => {
+            return Err(format!("Failed to execute pip install for edge-tts: {}", e));
+        }
+    }
 
-        match install_result {
-            Ok(output) => {
-                if !output.status.success() {
-                    let error_output = String::from_utf8_lossy(&output.stderr);
-                    return Err(format!("Failed to install {}: {}", package, error_output));
-                }
+    let _ = window.emit(
+        "PYTHON_SETUP_PROGRESS",
+        serde_json::json!({
+            "progress": 70,
+            "status": "Installing PyTorch with CUDA 118 support..."
+        }),
+    );
+
+    let torch_install = Command::new(&pip_path)
+        .args([
+            "install",
+            "torch==2.1.1+cu118",
+            "torchaudio==2.1.1+cu118",
+            "--index-url",
+            "https://download.pytorch.org/whl/cu118",
+        ])
+        .output();
+
+    match torch_install {
+        Ok(output) => {
+            if !output.status.success() {
+                let error_output = String::from_utf8_lossy(&output.stderr);
+                return Err(format!("Failed to install PyTorch: {}", error_output));
             }
-            Err(e) => {
-                return Err(format!(
-                    "Failed to execute pip install for {}: {}",
-                    package, e
-                ));
+        }
+        Err(e) => {
+            return Err(format!("Failed to execute pip install for PyTorch: {}", e));
+        }
+    }
+
+    let _ = window.emit(
+        "PYTHON_SETUP_PROGRESS",
+        serde_json::json!({
+            "progress": 90,
+            "status": "Installing rvc-python..."
+        }),
+    );
+
+    let install_result = Command::new(&pip_path).args(["install", "rvc-python"]).output();
+    match install_result {
+        Ok(output) => {
+            if !output.status.success() {
+                let error_output = String::from_utf8_lossy(&output.stderr);
+                return Err(format!("Failed to install rvc-python: {}", error_output));
             }
+        }
+        Err(e) => {
+            return Err(format!("Failed to execute pip install for rvc-python: {}", e));
         }
     }
 
@@ -903,7 +982,6 @@ pub async fn validate_server_requirements(app: AppHandle) -> Result<serde_json::
         "warnings": []
     });
 
-    // Check 1: Python environment exists
     let app_data_dir = app
         .path()
         .app_data_dir()
@@ -926,7 +1004,6 @@ pub async fn validate_server_requirements(app: AppHandle) -> Result<serde_json::
         return Ok(validation_result);
     }
 
-    // Check 2: Required libraries are installed
     let required_libs = ["rvc-python", "edge-tts", "torch", "torchaudio"];
     let pip_path = if cfg!(windows) {
         pythonenv.join("Scripts").join("pip.exe")
@@ -962,7 +1039,6 @@ pub async fn validate_server_requirements(app: AppHandle) -> Result<serde_json::
         }
     }
 
-    // Check 3: TTS settings and RVC model validation
     match crate::commands::tts::load_tts_settings(app.clone()).await {
         Ok(tts_config) => {
             let tts_mode = tts_config.get("ttsMode").and_then(|v| v.as_str()).unwrap_or("normal");
@@ -997,9 +1073,6 @@ pub async fn validate_server_requirements(app: AppHandle) -> Result<serde_json::
             }));
         }
     }
-
-    // Check 4: Twitch authentication (this will be handled by existing validation)
-    // We'll add this check in the frontend since we already have the logic there
 
     Ok(validation_result)
 }

@@ -75,7 +75,6 @@ const PythonEnvironmentTab = ({ settingsState }: PythonEnvironmentTabProps) => {
                         setSetupProgress(0);
                         setSetupStatus('Initializing setup...');
 
-                        // Listen for progress events
                         const window = getCurrentWindow();
                         const unlisten = await window.listen('PYTHON_SETUP_PROGRESS', (event: any) => {
                           const { progress, status } = event.payload;
@@ -90,7 +89,6 @@ const PythonEnvironmentTab = ({ settingsState }: PythonEnvironmentTabProps) => {
                           setSetupStatus('Environment setup completed successfully!');
                           unlisten();
                           
-                          // Check environment status again and update state
                           const status = await invoke('check_environment_status') as any;
                           if (status.environment_ready) {
                             setEnvironmentReady(true);
@@ -322,7 +320,6 @@ const PythonEnvironmentTab = ({ settingsState }: PythonEnvironmentTabProps) => {
                         const result = await invoke('force_reinstall_libraries');
                         logger.info('PythonEnvironment', `Force reinstall result: ${JSON.stringify(result)}`);
                         
-                        // Update environment status
                         const status = await invoke('check_environment_status') as any;
                         if (status.environment_ready && status.library_versions) {
                           const formatted = Object.entries(status.library_versions)
@@ -388,7 +385,6 @@ const PythonEnvironmentTab = ({ settingsState }: PythonEnvironmentTabProps) => {
                         const result = await invoke('reset_python_environment');
                         logger.info('PythonEnvironment', `Environment reset result: ${JSON.stringify(result)}`);
                         
-                        // Update environment status
                         const status = await invoke('check_environment_status') as any;
                         if (status.environment_ready) {
                           setEnvironmentReady(true);

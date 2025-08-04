@@ -1,5 +1,3 @@
-// Types for settings components
-
 export type SettingsTab = 'twitch' | 'audio' | 'tts' | 'python-env' | 'security' | 'logs';
 
 export interface TwitchRedemption {
@@ -46,7 +44,6 @@ export interface RvcSettings {
 
 export type TwitchAuthStatus = 'checking' | 'needs_credentials' | 'needs_auth' | 'authenticating' | 'ready' | 'error';
 
-// Log-related types
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 export interface LogEntry {

@@ -33,14 +33,12 @@ export default function TwitchIntegration({}: TwitchIntegrationProps) {
   const [clientId, setClientId] = useState('');
   const [showCredentialsForm, setShowCredentialsForm] = useState(false);
   
-  // Device code authentication state
   const [deviceInstructions, setDeviceInstructions] = useState<DeviceCodeInstructions | null>(null);
   const [timeRemaining, setTimeRemaining] = useState<number | null>(null);
 
   useEffect(() => {
     checkTwitchSetup();
 
-    // Listen for device code instructions
     const unlistenDeviceCode = listen('TWITCH_DEVICE_CODE', (event) => {
       try {
         const deviceCodeInfo = event.payload as any;
@@ -65,7 +63,7 @@ export default function TwitchIntegration({}: TwitchIntegrationProps) {
       setDeviceInstructions(null);
       setTimeRemaining(null);
       setSetupStatus('ready');
-      checkTwitchSetup(); // Refresh to get user info
+      checkTwitchSetup(); 
     });
 
     const unlistenAuthError = listen('ERROR', (event) => {
@@ -83,7 +81,6 @@ export default function TwitchIntegration({}: TwitchIntegrationProps) {
     };
   }, []);
 
-  // Countdown timer for device code expiration
   useEffect(() => {
     if (timeRemaining === null || timeRemaining <= 0) return;
 
@@ -107,7 +104,6 @@ export default function TwitchIntegration({}: TwitchIntegrationProps) {
     setError(null);
 
     try {
-      // Check if credentials exist
       const hasCredentials = await invoke<boolean>('twitch_has_saved_credentials');
       
       if (!hasCredentials) {
@@ -115,15 +111,12 @@ export default function TwitchIntegration({}: TwitchIntegrationProps) {
         return;
       }
 
-      // Load credentials to display
       const [savedClientId] = await invoke<[string, string | null]>('twitch_load_credentials');
       setClientId(savedClientId);
 
-      // Check auth status
       const authStatus = await invoke<string>('twitch_get_auth_status');
       
       if (authStatus === 'valid' || authStatus === 'expiring_soon') {
-        // Load user info
         const user = await invoke<UserInfo>('twitch_get_user_info');
         setUserInfo(user);
         setSetupStatus('ready');
@@ -179,7 +172,6 @@ export default function TwitchIntegration({}: TwitchIntegrationProps) {
       });
       
       logger.info('TwitchIntegration', `Authentication initiated: ${result}`);
-      // The authentication will be handled via events, so we just wait
     } catch (error) {
       setError(`Authentication failed: ${error}`);
     }
@@ -314,7 +306,6 @@ export default function TwitchIntegration({}: TwitchIntegrationProps) {
   );
 
   const renderSetupContent = () => {
-    // Show credentials form if toggled
     if (showCredentialsForm) {
       return renderCredentialsForm();
     }
@@ -565,7 +556,7 @@ export default function TwitchIntegration({}: TwitchIntegrationProps) {
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-xl font-bold text-white">Twitch Integration</h2>
-              <p className="text-gray-400 text-sm">Configure Twitch channel point redemptions</p>
+              <p className="text-gray-400 text-sm">Configure Twitch account authentication</p>
             </div>
             {renderStatusIndicator()}
           </div>

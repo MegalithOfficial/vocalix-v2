@@ -24,7 +24,6 @@ pub async fn write_log(
         .lock()
         .map_err(|e| format!("Failed to lock log file path: {}", e))?;
 
-    // Create log line
     let log_line = format!(
         "[{}] [{}] [{}] {}\n",
         log_entry.timestamp,
@@ -33,7 +32,6 @@ pub async fn write_log(
         log_entry.message
     );
 
-    // Write to file
     match fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -77,7 +75,6 @@ pub async fn get_logs(logging_state: State<'_, LoggingState>) -> Result<Vec<LogE
                 }
             }
 
-            // Return the last 1000 entries
             if logs.len() > 1000 {
                 let start = logs.len() - 1000;
                 logs.drain(0..start);
@@ -86,7 +83,6 @@ pub async fn get_logs(logging_state: State<'_, LoggingState>) -> Result<Vec<LogE
             Ok(logs)
         }
         Err(_) => {
-            // Return empty vec if file doesn't exist
             Ok(Vec::new())
         }
     }
@@ -105,7 +101,6 @@ pub async fn clear_logs(logging_state: State<'_, LoggingState>) -> Result<(), St
     }
 }
 
-// Helper function to parse log lines
 fn parse_log_line(line: &str) -> Option<LogEntry> {
     // Parse format: [timestamp] [LEVEL] [component] message
     if line.len() < 10 || !line.starts_with('[') {

@@ -11,14 +11,12 @@ import {
 } from '../types/settings';
 
 export const useSettingsState = (activeTab?: string) => {
-  // Audio Settings State
   const [audioQuality, setAudioQuality] = useState<AudioQuality>('high');
   const [outputDevices, setOutputDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedOutputDevice, setSelectedOutputDevice] = useState('default');
   const [volume, setVolume] = useState(50);
   const [isTestPlaying, setIsTestPlaying] = useState(false);
 
-  // TTS Settings State
   const [ttsMode, setTtsMode] = useState<'normal' | 'rvc'>('normal');
   const [ttsProvider, setTtsProvider] = useState('edgetts');
   const [ttsVoice, setTtsVoice] = useState('en-US-JennyNeural');
@@ -34,7 +32,6 @@ export const useSettingsState = (activeTab?: string) => {
     protectRate: 0.5
   });
 
-  // Redemptions Manager State
   const [redemptions, setRedemptions] = useState<TwitchRedemption[]>([]);
   const [redemptionConfigs, setRedemptionConfigs] = useState<Record<string, RedemptionConfig>>({});
   const [isLoadingRedemptions, setIsLoadingRedemptions] = useState(false);
@@ -44,7 +41,6 @@ export const useSettingsState = (activeTab?: string) => {
   const [isSavingConfigs, setIsSavingConfigs] = useState(false);
   const [isUploadingFiles, setIsUploadingFiles] = useState(false);
 
-  // Python Environment State
   const [isSettingUpEnv, setIsSettingUpEnv] = useState(false);
   const [setupProgress, setSetupProgress] = useState(0);
   const [setupStatus, setSetupStatus] = useState('');
@@ -56,13 +52,11 @@ export const useSettingsState = (activeTab?: string) => {
   const [environmentReady, setEnvironmentReady] = useState(false);
   const [isCheckingEnvironment, setIsCheckingEnvironment] = useState(true);
 
-  // Security Settings State
   const [autoAccept, setAutoAccept] = useState(false);
   const [manualConfirm, setManualConfirm] = useState(true);
   const [p2pPort, setP2pPort] = useState(12345);
   const [onlyClientMode, setOnlyClientMode] = useState(false);
 
-  // Check Twitch auth status
   const checkTwitchAuthStatus = async () => {
     try {
       const status = await invoke('twitch_get_auth_status') as string;
@@ -82,7 +76,6 @@ export const useSettingsState = (activeTab?: string) => {
     }
   };
 
-  // Load redemptions
   const loadRedemptions = async () => {
     setIsLoadingRedemptions(true);
     try {
@@ -90,7 +83,6 @@ export const useSettingsState = (activeTab?: string) => {
       setRedemptions(redemptionsData);
     } catch (error) {
       console.error('Error loading redemptions:', error);
-      // Fallback to mock data for development
       const mockRedemptions: TwitchRedemption[] = [
         { id: '1', title: 'Say Hi', cost: 100, enabled: true, is_enabled: true, prompt: 'Say hello to the streamer!' },
         { id: '2', title: 'Play Sound', cost: 200, enabled: true, is_enabled: true, prompt: 'Play a sound effect' },
@@ -102,7 +94,6 @@ export const useSettingsState = (activeTab?: string) => {
     }
   };
 
-  // Update redemption config
   const updateRedemptionConfig = (redemptionId: string, config: Partial<RedemptionConfig>) => {
     const newConfigs = {
       ...redemptionConfigs,
@@ -125,7 +116,6 @@ export const useSettingsState = (activeTab?: string) => {
     saveRedemptionConfigs(newConfigs);
   };
 
-  // Save redemption configs to storage
   const saveRedemptionConfigs = async (configs: Record<string, RedemptionConfig>) => {
     try {
       setIsSavingConfigs(true);
@@ -155,7 +145,6 @@ export const useSettingsState = (activeTab?: string) => {
     }
   };
 
-  // Load redemption configs from storage
   const loadRedemptionConfigs = async (): Promise<Record<string, RedemptionConfig>> => {
     try {
       const store = await load('redemptions.json', { autoSave: false });
@@ -187,7 +176,6 @@ export const useSettingsState = (activeTab?: string) => {
     }
   };
 
-  // Convert file to base64
   const convertFileToBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -201,7 +189,6 @@ export const useSettingsState = (activeTab?: string) => {
     });
   };
 
-  // Save audio file
   const saveAudioFile = async (redemptionTitle: string, file: File, fileIndex: number): Promise<boolean> => {
     try {
       const base64Data = await convertFileToBase64(file);
@@ -221,7 +208,6 @@ export const useSettingsState = (activeTab?: string) => {
     }
   };
 
-  // Load audio files
   const loadAudioFiles = async (redemptionName: string): Promise<string[]> => {
     try {
       const files = await invoke('get_audio_files', {
@@ -234,7 +220,6 @@ export const useSettingsState = (activeTab?: string) => {
     }
   };
 
-  // TTS Settings functions
   const saveTtsSettings = async () => {
     try {
       const ttsConfig = {
@@ -343,7 +328,6 @@ export const useSettingsState = (activeTab?: string) => {
     }
   };
 
-  // Load available models
   const loadAvailableModels = useCallback(async () => {
     try {
       const models = await invoke('get_pth_models') as string[];
@@ -354,7 +338,6 @@ export const useSettingsState = (activeTab?: string) => {
     }
   }, []);
 
-  // Load available devices
   const loadAvailableDevices = useCallback(async () => {
     try {
       const devices = await invoke('get_available_devices') as Array<{type: string, name: string, id: string}>;
@@ -362,12 +345,10 @@ export const useSettingsState = (activeTab?: string) => {
       console.log('Available devices loaded:', devices);
     } catch (error) {
       console.error('Error loading available devices:', error);
-      // Fallback to CPU only
       setAvailableDevices([{type: 'cpu', name: 'CPU', id: 'cpu'}]);
     }
   }, []);
 
-  // Load security settings
   const loadSecuritySettings = useCallback(async () => {
     try {
       const settings = await invoke('load_security_settings') as {p2p_port: number, only_client_mode: boolean};
@@ -379,7 +360,6 @@ export const useSettingsState = (activeTab?: string) => {
     }
   }, []);
 
-  // Delete model
   const deleteModel = async (modelName: string) => {
     if (!confirm(`Are you sure you want to delete ${modelName}?`)) {
       return;
@@ -392,10 +372,8 @@ export const useSettingsState = (activeTab?: string) => {
 
       console.log(`Model file deleted: ${modelName}`);
       
-      // Refresh the available models list
       await loadAvailableModels();
       
-      // Clear selection if the deleted model was selected
       if (selectedModel === modelName) {
         setSelectedModel('');
       }
@@ -405,16 +383,12 @@ export const useSettingsState = (activeTab?: string) => {
     }
   };
 
-  // Initialize state on mount
   useEffect(() => {
-    // Load audio devices - simple approach without permissions
     const loadAudioDevices = async () => {
       try {
-        // Simple device enumeration without requesting any permissions
         const devices = await navigator.mediaDevices.enumerateDevices();
         const audioOutputs = devices.filter(device => device.kind === 'audiooutput');
         
-        // Always add a default device
         const defaultDevice = {
           deviceId: 'default',
           kind: 'audiooutput' as const,
@@ -423,17 +397,14 @@ export const useSettingsState = (activeTab?: string) => {
         } as MediaDeviceInfo;
         
         if (audioOutputs.length > 0) {
-          // Add default device first, then the detected devices
           setOutputDevices([defaultDevice, ...audioOutputs]);
           console.log('Audio output devices loaded successfully:', audioOutputs.length + 1);
         } else {
-          // Only default device available
           setOutputDevices([defaultDevice]);
           console.log('Only default audio device available');
         }
       } catch (error) {
         console.warn('Could not enumerate audio devices, using default only:', error);
-        // Fallback to just default device
         setOutputDevices([{
           deviceId: 'default',
           kind: 'audiooutput' as const,
@@ -450,12 +421,9 @@ export const useSettingsState = (activeTab?: string) => {
     loadAvailableModels();
     loadSecuritySettings();
 
-    return () => {
-      // No interval to clear on initial mount
-    };
+    return () => { };
   }, []);
 
-  // Set up periodic auth status checking only when on Twitch tab
   useEffect(() => {
     let authCheckInterval: number | null = null;
     
@@ -474,7 +442,6 @@ export const useSettingsState = (activeTab?: string) => {
     };
   }, [activeTab]);
 
-  // Check Python environment status on mount
   useEffect(() => {
     const checkEnvironmentStatus = async () => {
       try {
@@ -508,7 +475,6 @@ export const useSettingsState = (activeTab?: string) => {
     checkEnvironmentStatus();
   }, []);
 
-  // Auto-load redemptions when auth becomes ready
   useEffect(() => {
     if (twitchAuthStatus === 'ready' && redemptions.length === 0 && !isLoadingRedemptions) {
       console.log('SettingsPage: Auto-loading redemptions after auth ready');
@@ -516,7 +482,6 @@ export const useSettingsState = (activeTab?: string) => {
     }
   }, [twitchAuthStatus, redemptions.length, isLoadingRedemptions]);
 
-  // Load existing configurations on component mount
   useEffect(() => {
     const initializeConfigs = async () => {
       const savedConfigs = await loadRedemptionConfigs();
@@ -561,7 +526,6 @@ export const useSettingsState = (activeTab?: string) => {
   }, [redemptions]);
 
   return {
-    // Audio Settings
     audioQuality,
     setAudioQuality,
     outputDevices,
@@ -574,7 +538,6 @@ export const useSettingsState = (activeTab?: string) => {
     saveAudioSettings,
     loadAudioSettings,
 
-    // TTS Settings
     ttsMode,
     setTtsMode,
     ttsProvider,
@@ -599,7 +562,6 @@ export const useSettingsState = (activeTab?: string) => {
     saveSecuritySettings,
     deleteModel,
 
-    // Redemptions
     redemptions,
     setRedemptions,
     redemptionConfigs,
@@ -620,7 +582,6 @@ export const useSettingsState = (activeTab?: string) => {
     loadAudioFiles,
     convertFileToBase64,
 
-    // Python Environment
     isSettingUpEnv,
     setIsSettingUpEnv,
     setupProgress,
@@ -642,7 +603,6 @@ export const useSettingsState = (activeTab?: string) => {
     isCheckingEnvironment,
     setIsCheckingEnvironment,
 
-    // Security
     autoAccept,
     setAutoAccept,
     manualConfirm,
@@ -652,7 +612,6 @@ export const useSettingsState = (activeTab?: string) => {
     onlyClientMode,
     setOnlyClientMode,
 
-    // Utility functions
     checkTwitchAuthStatus,
   };
 };

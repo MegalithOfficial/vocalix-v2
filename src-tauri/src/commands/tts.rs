@@ -6,17 +6,14 @@ use base64::{Engine as _, engine::general_purpose};
 pub async fn save_tts_settings(app: AppHandle, config: serde_json::Value) -> Result<(), String> {
     use std::fs;
 
-    // Get app data directory
     let app_data_dir = app
         .path()
         .app_data_dir()
         .map_err(|e| format!("Failed to get app data directory: {}", e))?;
 
-    // Create app data directory if it doesn't exist
     fs::create_dir_all(&app_data_dir)
         .map_err(|e| format!("Failed to create app data directory: {}", e))?;
 
-    // Create the full path for texttospeech.json
     let config_path = app_data_dir.join("texttospeech.json");
 
     let config_str = serde_json::to_string_pretty(&config)
@@ -33,7 +30,6 @@ pub async fn save_tts_settings(app: AppHandle, config: serde_json::Value) -> Res
 pub async fn load_tts_settings(app: AppHandle) -> Result<serde_json::Value, String> {
     use std::fs;
 
-    // Get app data directory
     let app_data_dir = app
         .path()
         .app_data_dir()
@@ -48,7 +44,6 @@ pub async fn load_tts_settings(app: AppHandle) -> Result<serde_json::Value, Stri
             Ok(config)
         }
         Err(_) => {
-            // Return empty config if file doesn't exist
             Ok(serde_json::json!({}))
         }
     }
@@ -87,11 +82,11 @@ fn convert_path_for_cli(p: &std::path::Path) -> String { p.to_string_lossy().rep
 #[tauri::command]
 pub async fn generate_tts(
     app: AppHandle,
-    mode: String,                 // "normal" | "rvc"
+    mode: String,                
     text: String,
-    voice: Option<String>,        // Edge-TTS voice, e.g., en-US-JennyNeural
-    model_file: Option<String>,   // for RVC: .pth file name stored under pythonenv/models
-    device: Option<String>,       // e.g. "cpu" | "cuda:0"
+    voice: Option<String>,       
+    model_file: Option<String>,   
+    device: Option<String>,      
     inference_rate: Option<f64>,
     filter_radius: Option<i32>,
     resample_rate: Option<f64>,
@@ -108,7 +103,6 @@ pub async fn generate_tts(
 
     app.emit("tts_status", serde_json::json!({"progress": 5, "status": "starting"})).ok();
 
-    // Run edge-tts via venv Python
     let v = voice.unwrap_or_else(|| "en-US-JennyNeural".to_string());
     let edge_args = [
         "-m", "edge_tts", "--voice", &v, "--text", &text, "--write-media",
@@ -131,7 +125,6 @@ pub async fn generate_tts(
     if mode == "normal" {
         app.emit("tts_status", serde_json::json!({"progress": 100, "status": "completed"})).ok();
         
-        // Read the audio file and convert to base64
         let audio_data = std::fs::read(&tts_path)
             .map_err(|e| format!("Failed to read audio file: {}", e))?;
         let base64_audio = general_purpose::STANDARD.encode(&audio_data);
@@ -144,9 +137,7 @@ pub async fn generate_tts(
         }));
     }
 
-    // For RVC mode, run the conversion using the RVC model via rvc_python cli
     app.emit("tts_status", serde_json::json!({"progress": 50, "status": "enhancing (rvc)"})).ok();
-    // Load selected model from settings if not provided
     let model = if let Some(m) = model_file { m } else {
         let cfg = load_tts_settings(app.clone()).await.unwrap_or_else(|_| serde_json::json!({}));
         cfg.get("selectedModel").and_then(|v| v.as_str()).unwrap_or("").to_string()
@@ -199,7 +190,6 @@ pub async fn generate_tts(
 
     app.emit("tts_status", serde_json::json!({"progress": 100, "status": "completed"})).ok();
     
-    // Read the RVC output file and convert to base64
     let audio_data = std::fs::read(&rvc_path)
         .map_err(|e| format!("Failed to read RVC audio file: {}", e))?;
     let base64_audio = general_purpose::STANDARD.encode(&audio_data);

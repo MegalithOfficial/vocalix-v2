@@ -27,9 +27,7 @@ const AudioSettingsTab = ({ settingsState }: AudioSettingsTabProps) => {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const isInitialMount = useRef(true);
 
-  // Auto-save settings when they change
   useEffect(() => {
-    // Don't save on initial mount - let loadAudioSettings handle that
     if (isInitialMount.current) {
       isInitialMount.current = false;
       return;
@@ -38,7 +36,7 @@ const AudioSettingsTab = ({ settingsState }: AudioSettingsTabProps) => {
     const timeoutId = setTimeout(() => {
       console.log('Auto-saving audio settings...');
       saveAudioSettings();
-    }, 500); // Debounce saves by 500ms
+    }, 500); 
 
     return () => clearTimeout(timeoutId);
   }, [audioQuality, selectedOutputDevice, volume, saveAudioSettings]);
@@ -182,7 +180,7 @@ const AudioSettingsTab = ({ settingsState }: AudioSettingsTabProps) => {
                 value={selectedOutputDevice}
                 onChange={(e) => handleOutputDeviceChange(e.target.value)}
                 className="w-full px-4 py-3 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-purple-500"
-                style={{ backgroundColor: '#374151' }} // Tailwind's gray-700
+                style={{ backgroundColor: '#374151' }} 
                 >
                 <option value="default">Default Output Device</option>
                 {outputDevices.map((device) => (

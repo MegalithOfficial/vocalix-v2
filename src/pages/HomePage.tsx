@@ -15,14 +15,13 @@ const HomePage = () => {
   const { onlyClientMode } = useSettingsState();
 
   const handleHostServer = async () => {
-    if (onlyClientMode) return; // Disabled in client-only mode
+    if (onlyClientMode) return; 
     setIsValidating(true);
     setShowValidationResults(false);
     setValidationErrors([]);
     setValidationWarnings([]);
     
     try {
-      // Step 1: Validate server requirements (Python env, libraries, TTS)
       setValidationStep('Checking Python environment and libraries...');
       await new Promise(resolve => setTimeout(resolve, 500));
       
@@ -38,9 +37,8 @@ const HomePage = () => {
         setValidationWarnings(serverValidation.warnings);
       }
 
-      // Step 2: Check if credentials are saved
       setValidationStep('Checking saved credentials...');
-      await new Promise(resolve => setTimeout(resolve, 500)); // Small delay for UX
+      await new Promise(resolve => setTimeout(resolve, 500)); 
       
       const hasCredentials = await invoke('twitch_has_saved_credentials') as boolean;
       if (!hasCredentials) {
@@ -54,7 +52,6 @@ const HomePage = () => {
         return;
       }
 
-      // Step 3: Validate access and refresh tokens
       setValidationStep('Validating tokens...');
       await new Promise(resolve => setTimeout(resolve, 500));
       
@@ -70,7 +67,6 @@ const HomePage = () => {
         return;
       }
 
-      // Step 4: Verify client ID and required credentials
       setValidationStep('Verifying credentials...');
       await new Promise(resolve => setTimeout(resolve, 500));
       
@@ -88,11 +84,9 @@ const HomePage = () => {
         return;
       }
 
-      // Step 5: All checks passed, proceed to EventSub connection
       setValidationStep('Starting EventSub connection...');
       await new Promise(resolve => setTimeout(resolve, 300));
       
-      // Navigate to the connecting page
       navigate('/connecting-eventsub');
       
     } catch (error) {

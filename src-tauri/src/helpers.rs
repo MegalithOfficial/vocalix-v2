@@ -1,6 +1,75 @@
 use crate::services::twitch::{parse_channel_points_redemption, EventSubEvent};
 use crate::{log_debug, log_error, log_info, log_warn};
-use tauri::{Emitter, Window};
+use tauri::{Emitter, Window, Manager};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use tauri_plugin_store::StoreExt;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct RedemptionConfig {
+    enabled: bool,
+    #[serde(rename = "ttsType")]
+    tts_type: String,
+    #[serde(rename = "dynamicTemplate")]
+    dynamic_template: Option<String>,
+    #[serde(rename = "staticFiles")]
+    static_files: Option<Vec<Value>>,
+    #[serde(rename = "timerEnabled")]
+    timer_enabled: Option<bool>,
+    #[serde(rename = "timerDuration")]
+    timer_duration: Option<String>,
+}
+
+fn is_redemption_allowed(redemption_id: &str, window: &Window) -> bool {
+    let app = window.app_handle();
+    
+    match app.store("redemptions.json") {
+        Ok(store) => {
+            if let Some(redemption_configs_value) = store.get("redemptionConfigs") {
+                if let Some(redemption_configs) = redemption_configs_value.as_object() {
+                    if let Some(config_value) = redemption_configs.get(redemption_id) {
+                        if let Ok(config) = serde_json::from_value::<RedemptionConfig>(config_value.clone()) {
+                            log_info!(
+                                "RedemptionFilter",
+                                "Redemption {} is configured and enabled: {}",
+                                redemption_id,
+                                config.enabled
+                            );
+                            return config.enabled;
+                        } else {
+                            log_warn!(
+                                "RedemptionFilter",
+                                "Failed to parse config for redemption {}",
+                                redemption_id
+                            );
+                        }
+                    } else {
+                        log_info!(
+                            "RedemptionFilter",
+                            "Redemption {} not found in configurations, blocking",
+                            redemption_id
+                        );
+                        return false;
+                    }
+                } else {
+                    log_warn!("RedemptionFilter", "redemptionConfigs is not an object");
+                }
+            } else {
+                log_warn!("RedemptionFilter", "No redemptionConfigs found in store");
+            }
+        }
+        Err(e) => {
+            log_error!("RedemptionFilter", "Failed to access store: {}", e);
+        }
+    }
+    
+    log_info!(
+        "RedemptionFilter",
+        "Blocking redemption {} due to missing or invalid configuration",
+        redemption_id
+    );
+    false
+}
 
 #[tauri::command]
 pub async fn open_url(url: String) -> Result<(), String> {
@@ -97,11 +166,23 @@ pub async fn handle_twitch_event(
                 "channel.channel_points_custom_reward_redemption.add" => {
                     match parse_channel_points_redemption(&event) {
                         Ok(redemption) => {
+                            if !is_redemption_allowed(&redemption.reward.id, window) {
+                                log_info!(
+                                    "TwitchEventSub",
+                                    "Redemption '{}' (ID: {}) by {} is not enabled in configurations, skipping",
+                                    redemption.reward.title,
+                                    redemption.reward.id,
+                                    redemption.user_name
+                                );
+                                return Ok(());
+                            }
+
                             log_info!(
                                 "TwitchEventSub",
-                                "Channel points redemption: {} redeemed '{}' for {} points",
+                                "Channel points redemption: {} redeemed '{}' (ID: {}) for {} points",
                                 redemption.user_name,
                                 redemption.reward.title,
+                                redemption.reward.id,
                                 redemption.reward.cost
                             );
 
@@ -110,6 +191,7 @@ pub async fn handle_twitch_event(
                                 "user_name": redemption.user_name,
                                 "user_input": redemption.user_input,
                                 "reward_title": redemption.reward.title,
+                                "reward_id": redemption.reward.id,
                                 "reward_cost": redemption.reward.cost,
                                 "reward_prompt": redemption.reward.prompt,
                                 "redeemed_at": redemption.redeemed_at.to_rfc3339(),

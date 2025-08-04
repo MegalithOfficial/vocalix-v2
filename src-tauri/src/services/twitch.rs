@@ -216,14 +216,13 @@ impl TwitchEventSub {
 
             match connection_result {
                 Ok(new_reconnect_url) => {
-                    // Reset reconnect attempts on successful connection
                     *self.reconnect_attempts.lock().await = 0;
 
                     if let Some(url) = new_reconnect_url {
+                        info!("Switching to reconnect URL: {}", url);
                         reconnect_url = Some(url);
                         continue;
                     } else {
-                        // Connection closed normally
                         break;
                     }
                 }
@@ -231,7 +230,14 @@ impl TwitchEventSub {
                     *self.reconnect_attempts.lock().await += 1;
                     error!("Connection failed (attempt {}): {}", attempts + 1, e);
 
-                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    if e.to_string().contains("Invalid reconnect URL") {
+                        warn!("Invalid reconnect URL received, falling back to original EventSub URL");
+                        reconnect_url = None;
+                    }
+
+                    if !e.to_string().contains("Invalid reconnect URL") {
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                    }
                     continue;
                 }
             }
@@ -247,8 +253,22 @@ impl TwitchEventSub {
         let url = reconnect_url.unwrap_or_else(|| EVENTSUB_WEBSOCKET_URL.to_string());
         info!("Connecting to EventSub WebSocket: {}", url);
 
-        let url = Url::parse(&url)?;
-        let (ws_stream, _) = connect_async(url)
+        let parsed_url = Url::parse(&url)
+            .map_err(|e| anyhow!("Failed to parse WebSocket URL '{}': {}", url, e))?;
+        
+        if parsed_url.scheme() != "wss" {
+            return Err(anyhow!("Invalid URL scheme '{}', expected 'wss'", parsed_url.scheme()));
+        }
+        
+        if let Some(host) = parsed_url.host_str() {
+            if !host.ends_with("twitch.tv") {
+                return Err(anyhow!("Invalid host '{}', expected Twitch domain", host));
+            }
+        } else {
+            return Err(anyhow!("No host in URL"));
+        }
+
+        let (ws_stream, _) = connect_async(parsed_url)
             .await
             .map_err(|e| anyhow!("Failed to connect to WebSocket: {}", e))?;
 
@@ -301,6 +321,12 @@ impl TwitchEventSub {
 
                             warn!("WebSocket closed with code {}: {}", code, reason);
                             self.handle_close_code(code).await;
+                            
+                            // For invalid reconnect URL, return special error to reset reconnect URL
+                            if code == CLOSE_CODE_INVALID_RECONNECT {
+                                return Err(anyhow!("Invalid reconnect URL - falling back to original URL"));
+                            }
+                            
                             return Ok(None);
                         }
                         Some(Err(e)) => {

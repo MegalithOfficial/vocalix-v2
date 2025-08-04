@@ -27,15 +27,12 @@ const SecuritySettingsTab = ({ settingsState }: SecuritySettingsTabProps) => {
   const [isSaving, setIsSaving] = useState(false);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
 
-  // Load security settings when component mounts
   useEffect(() => {
     loadSecuritySettings();
   }, [loadSecuritySettings]);
 
-  // Save settings when they change (except client mode which has special handling)
   useEffect(() => {
     const saveCurrentSettings = async () => {
-      // Skip saving on initial load
       if (lastSaved === null) {
         setLastSaved(new Date());
         return;
@@ -53,17 +50,14 @@ const SecuritySettingsTab = ({ settingsState }: SecuritySettingsTabProps) => {
       }
     };
 
-    // Add a small delay to avoid saving on rapid changes
     const timeoutId = setTimeout(saveCurrentSettings, 1000);
     return () => clearTimeout(timeoutId);
   }, [p2pPort, autoAccept, manualConfirm, saveSecuritySettings]);
 
   const handlePortChange = async (value: number) => {
     setP2pPort(value);
-    // Note: useEffect will handle the saving automatically
   };
 
-  // NEW: reset to default port
   const handleResetPort = () => {
     setP2pPort(12345);
   };
@@ -84,16 +78,12 @@ const SecuritySettingsTab = ({ settingsState }: SecuritySettingsTabProps) => {
 
   const confirmClientModeChange = async () => {
     try {
-      // Update local state first
       setOnlyClientMode(pendingClientModeValue);
 
-      // Save the settings to backend
       await saveSecuritySettings();
 
-      // Close modal
       setShowClientModeModal(false);
 
-      // Restart the app
       setTimeout(async () => {
         await invoke('restart_app');
       }, 3000);
