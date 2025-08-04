@@ -134,6 +134,9 @@ const ServerPage = () => {
         setIsServerRunning(true);
         setError(null);
         getNetworkInfo();
+      } else if (message.includes('Connection closed')) {
+        setIsClientConnected(false);
+        addServerLog('info', 'Client disconnected');
       }
     });
 
@@ -185,6 +188,20 @@ const ServerPage = () => {
       navigate('/');
     });
 
+    const unlistenSuccess = listen('SUCCESS', (event) => {
+      if (!mounted) return;
+      
+      const message = event.payload as string;
+      console.log('Success event:', message);
+      addServerLog('success', message);
+      
+      // Check if this is about the encrypted channel being established
+      if (message.includes('Secure encrypted channel established')) {
+        setIsClientConnected(true);
+        addServerLog('success', 'Client connected and encrypted channel established!');
+      }
+    });
+
     const connectionCheckInterval = setInterval(() => {
       if (mounted && isServerRunning) {
         checkConnectionStatus();
@@ -220,6 +237,7 @@ const ServerPage = () => {
       unlistenError.then(f => f());
       unlistenTwitchRedemption.then(f => f());
       unlistenServerStopped.then(f => f());
+      unlistenSuccess.then(f => f());
     };
   }, []); 
 
