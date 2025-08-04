@@ -38,6 +38,7 @@ const ClientPage = () => {
    const [isLoadingAudio, setIsLoadingAudio] = useState(false);
    const [audioDeviceId, setAudioDeviceId] = useState<string>('default');
    const [currentAudio, setCurrentAudio] = useState<HTMLAudioElement | null>(null);
+   const [audioSrc, setAudioSrc] = useState<string | null>(null);
 
    const addLog = (type: 'info' | 'error' | 'success', message: string) => {
       setLogs(prev => [...prev, { type, message }].slice(-10)); 
@@ -117,72 +118,112 @@ const ClientPage = () => {
          }
          
          const audioUrl = URL.createObjectURL(audioBlob);
-         const audio = new Audio(audioUrl);
          
-         if ('setSinkId' in audio && audioDeviceId !== 'default') {
-            try {
-               await (audio as any).setSinkId(audioDeviceId);
-               addLog('info', `Audio output set to device: ${audioDeviceId}`);
-            } catch (error) {
-               console.warn('Failed to set audio output device:', error);
-               addLog('info', 'Using default audio device (device selection not supported)');
-            }
+         // Clean up previous audio URL
+         if (audioSrc) {
+            URL.revokeObjectURL(audioSrc);
          }
+         
+         setAudioSrc(audioUrl);
 
-         audio.onended = () => {
-            setIsPlaying(false);
-            setIsLoadingAudio(false);
-            setCurrentAudio(null);
-            URL.revokeObjectURL(audioUrl);
-            addLog('info', 'Audio playback completed');
-         };
+         // Use the HTML audio element in the DOM
+         const audioElement = document.getElementById('main-audio') as HTMLAudioElement;
+         if (audioElement) {
+            audioElement.src = audioUrl;
+            
+            if ('setSinkId' in audioElement && audioDeviceId !== 'default') {
+               try {
+                  await (audioElement as any).setSinkId(audioDeviceId);
+                  addLog('info', `Audio output set to device: ${audioDeviceId}`);
+               } catch (error) {
+                  console.warn('Failed to set audio output device:', error);
+                  addLog('info', 'Using default audio device (device selection not supported)');
+               }
+            }
 
-         audio.onerror = (event) => {
-            setIsPlaying(false);
-            setIsLoadingAudio(false);
-            setCurrentAudio(null);
-            URL.revokeObjectURL(audioUrl);
-            addLog('error', 'Audio playback failed - file may be corrupted');
-            console.error('Audio error:', event);
-         };
+            audioElement.onended = () => {
+               setIsPlaying(false);
+               setIsLoadingAudio(false);
+               setCurrentAudio(null);
+               URL.revokeObjectURL(audioUrl);
+               setAudioSrc(null);
+               addLog('info', 'Audio playback completed');
+            };
 
-         audio.onloadstart = () => {
-            addLog('info', 'Loading audio...');
-         };
+            audioElement.onerror = (event) => {
+               setIsPlaying(false);
+               setIsLoadingAudio(false);
+               setCurrentAudio(null);
+               URL.revokeObjectURL(audioUrl);
+               setAudioSrc(null);
+               addLog('error', 'Audio playback failed - file may be corrupted');
+               console.error('Audio error:', event);
+            };
 
-         audio.oncanplay = () => {
-            setIsLoadingAudio(false);
-            setIsPlaying(true);
-            addLog('info', 'Audio ready to play');
-         };
+            audioElement.onloadstart = () => {
+               addLog('info', 'Loading audio...');
+            };
 
-         setCurrentAudio(audio);
-         await audio.play();
+            audioElement.oncanplay = () => {
+               setIsLoadingAudio(false);
+               setIsPlaying(true);
+               addLog('info', 'Audio ready to play');
+            };
 
-         addLog('success', 'Audio playback started');
+            setCurrentAudio(audioElement);
+            await audioElement.play();
+
+            addLog('success', 'Audio playback started');
+         } else {
+            throw new Error('Audio element not found in DOM');
+         }
       } catch (error) {
          console.error('Failed to play audio:', error);
          addLog('error', `Audio playback failed: ${error}`);
          setIsPlaying(false);
          setIsLoadingAudio(false);
          setCurrentAudio(null);
+         if (audioSrc) {
+            URL.revokeObjectURL(audioSrc);
+            setAudioSrc(null);
+         }
       }
    };
 
    const stopAudio = () => {
+      const audioElement = document.getElementById('main-audio') as HTMLAudioElement;
+      if (audioElement) {
+         audioElement.pause();
+         audioElement.currentTime = 0;
+      }
       if (currentAudio) {
          currentAudio.pause();
          currentAudio.currentTime = 0;
-         setCurrentAudio(null);
-         setIsPlaying(false);
-         setIsLoadingAudio(false);
-         addLog('info', 'Audio playback stopped');
       }
+      setCurrentAudio(null);
+      setIsPlaying(false);
+      setIsLoadingAudio(false);
+      if (audioSrc) {
+         URL.revokeObjectURL(audioSrc);
+         setAudioSrc(null);
+      }
+      addLog('info', 'Audio playback stopped');
    };
 
    const replayAudio = async () => {
-      if (latestRedemption && latestRedemption.filePath) {
-         await playAudio(latestRedemption.filePath);
+      if (latestRedemption && (latestRedemption.filePath || audioSrc)) {
+         if (latestRedemption.filePath) {
+            await playAudio(latestRedemption.filePath);
+         } else if (audioSrc) {
+            // If we still have the audio source, just replay it
+            const audioElement = document.getElementById('main-audio') as HTMLAudioElement;
+            if (audioElement) {
+               audioElement.currentTime = 0;
+               await audioElement.play();
+               setIsPlaying(true);
+               addLog('info', 'Replaying audio');
+            }
+         }
       }
    };
 
@@ -286,6 +327,17 @@ const ClientPage = () => {
       });
 
       return () => {
+         // Clean up audio resources
+         if (audioSrc) {
+            URL.revokeObjectURL(audioSrc);
+         }
+         const audioElement = document.getElementById('main-audio') as HTMLAudioElement;
+         if (audioElement) {
+            audioElement.pause();
+            audioElement.src = '';
+         }
+         
+         // Clean up event listeners
          unlistenStatus.then(f => f());
          unlistenPairing.then(f => f());
          unlistenSuccess.then(f => f());
@@ -734,6 +786,11 @@ const ClientPage = () => {
                </motion.div>
             </div>
          </div>
+         <audio
+            id="main-audio"
+            preload="none"
+            style={{ display: 'none' }}
+         />
       </div>
    );
 };
