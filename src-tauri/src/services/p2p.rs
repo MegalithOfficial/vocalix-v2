@@ -86,8 +86,16 @@ pub async fn handle_connection(
                         msg
                     },
                     Err(e) => {
-                        log_and_emit(&window, role, "PARSE_ERROR", &format!("Failed to parse message: {}", e)).await;
-                        window.emit("ERROR", format!("Parse error: {}", e)).unwrap();
+                        let raw_data = String::from_utf8_lossy(&buffer[..n]);
+                        let error_details = format!(
+                            "Failed to parse message: {}\nRaw data ({} bytes): {}\nHex: {}",
+                            e,
+                            n,
+                            raw_data,
+                            hex::encode(&buffer[..n])
+                        );
+                        log_and_emit(&window, role, "PARSE_ERROR", &error_details).await;
+                        window.emit("ERROR", error_details).unwrap();
                         continue;
                     }
                 };
