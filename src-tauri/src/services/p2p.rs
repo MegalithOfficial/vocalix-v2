@@ -64,6 +64,8 @@ pub async fn handle_connection(
     }
 
     let mut buffer = vec![0; 8192];
+    let mut line_buffer = Vec::new(); // Buffer to accumulate partial messages
+    
     loop {
         tokio::select! {
             // Handle incoming network messages
@@ -80,29 +82,42 @@ pub async fn handle_connection(
                     }
                 };
 
-                let received_msg: Message = match serde_json::from_slice(&buffer[..n]) {
-                    Ok(msg) => {
-                        log_and_emit(&window, role, "MESSAGE_RECEIVED", &format!("{:?}", msg)).await;
-                        msg
-                    },
-                    Err(e) => {
-                        let raw_data = String::from_utf8_lossy(&buffer[..n]);
-                        let error_details = format!(
-                            "Failed to parse message: {}\nRaw data ({} bytes): {}\nHex: {}",
-                            e,
-                            n,
-                            raw_data,
-                            hex::encode(&buffer[..n])
-                        );
-                        log_and_emit(&window, role, "PARSE_ERROR", &error_details).await;
-                        window.emit("ERROR", error_details).unwrap();
-                        continue;
-                    }
-                };
+                // Add received bytes to line buffer
+                line_buffer.extend_from_slice(&buffer[..n]);
 
-                // Process the message based on current state
-                match (&connection_state, &received_msg) {
-                    // === AUTHENTICATION PHASE ===
+                // Process complete messages (lines ending with \n)
+                while let Some(newline_pos) = line_buffer.iter().position(|&b| b == b'\n') {
+                    // Extract one complete message (excluding the newline)
+                    let message_bytes = line_buffer.drain(..newline_pos + 1).collect::<Vec<u8>>();
+                    let message_bytes = &message_bytes[..message_bytes.len() - 1]; // Remove the newline
+
+                    if message_bytes.is_empty() {
+                        continue; // Skip empty lines
+                    }
+
+                    let received_msg: Message = match serde_json::from_slice(message_bytes) {
+                        Ok(msg) => {
+                            log_and_emit(&window, role, "MESSAGE_RECEIVED", &format!("{:?}", msg)).await;
+                            msg
+                        },
+                        Err(e) => {
+                            let raw_data = String::from_utf8_lossy(message_bytes);
+                            let error_details = format!(
+                                "Failed to parse message: {}\nRaw data ({} bytes): {}\nHex: {}",
+                                e,
+                                message_bytes.len(),
+                                raw_data,
+                                hex::encode(message_bytes)
+                            );
+                            log_and_emit(&window, role, "PARSE_ERROR", &error_details).await;
+                            window.emit("ERROR", error_details).unwrap();
+                            continue;
+                        }
+                    };
+
+                    // Process the message based on current state
+                    match (&connection_state, &received_msg) {
+                        // === AUTHENTICATION PHASE ===
                     (ConnectionState::Authenticating, Message::Hello(peer_key)) => {
                         peer_public_key_hex = Some(hex::encode(peer_key));
                         let peer_key_short = &peer_public_key_hex.as_ref().unwrap()[..16];
@@ -387,6 +402,7 @@ pub async fn handle_connection(
                         window.emit("ERROR", format!("Unexpected message {:?} in state {:?}", received_msg, connection_state)).unwrap();
                     }
                 }
+                } // Close the while loop for processing complete messages
             },
 
             // Handle user confirmation
@@ -516,7 +532,9 @@ async fn log_and_emit(window: &Window, role: &str, event: &str, details: &str) {
 
 async fn send_message(stream: &mut TcpStream, msg: &Message) {
     if let Ok(json) = serde_json::to_string(msg) {
-        let _ = stream.write_all(json.as_bytes()).await;
+        // Add newline delimiter to separate messages in the TCP stream
+        let message_with_delimiter = format!("{}\n", json);
+        let _ = stream.write_all(message_with_delimiter.as_bytes()).await;
     }
 }
 
