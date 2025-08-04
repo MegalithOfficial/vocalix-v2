@@ -1,4 +1,5 @@
 use crate::{log_info, log_warn};
+use crate::helpers::create_hidden_command;
 use tauri::{AppHandle, Emitter, Manager, Window};
 
 #[tauri::command]
@@ -100,7 +101,7 @@ pub async fn setup_python_environment(
     window: Window,
 ) -> Result<serde_json::Value, String> {
     use std::fs;
-    use std::process::Command;
+    // Command execution now uses hidden commands
 
     log_info!(
         "PythonEnvironment",
@@ -128,7 +129,7 @@ pub async fn setup_python_environment(
 
     let python_command = if cfg!(windows) { "python" } else { "python3" };
 
-    let python_check = Command::new(python_command)
+    let python_check = create_hidden_command(python_command)
         .arg("--version")
         .output()
         .map_err(|e| {
@@ -196,7 +197,7 @@ pub async fn setup_python_environment(
         "Step 3: Creating Python virtual environment..."
     );
 
-    let venv_creation = Command::new(python_command)
+    let venv_creation = create_hidden_command(python_command)
         .args(["-m", "venv", pythonenv_dir.to_str().unwrap()])
         .output()
         .map_err(|e| format!("Failed to create virtual environment: {}", e))?;
@@ -226,7 +227,7 @@ pub async fn setup_python_environment(
         .unwrap();
     log_info!("PythonEnvironment", "Step 4: Installing edge-tts...");
 
-    let edge_tts_install = Command::new(&pip_path)
+    let edge_tts_install = create_hidden_command(&pip_path)
         .args(["install", "edge-tts"])
         .output()
         .map_err(|e| format!("Failed to install edge-tts: {}", e))?;
@@ -250,7 +251,7 @@ pub async fn setup_python_environment(
         "Step 5: Installing PyTorch with CUDA 118..."
     );
 
-    let torch_install = Command::new(&pip_path)
+    let torch_install = create_hidden_command(&pip_path)
         .args([
             "install",
             "torch==2.1.1+cu118",
@@ -279,7 +280,7 @@ pub async fn setup_python_environment(
         "Step 6: Installing torchaudio with CUDA 118..."
     );
 
-    let torchaudio_install = Command::new(&pip_path)
+    let torchaudio_install = create_hidden_command(&pip_path)
         .args([
             "install",
             "torchaudio==2.1.1+cu118",
@@ -305,7 +306,7 @@ pub async fn setup_python_environment(
         .unwrap();
     log_info!("PythonEnvironment", "Step 7: Installing rvc-python...");
 
-    let rvc_python_install = Command::new(&pip_path)
+    let rvc_python_install = create_hidden_command(&pip_path)
         .args(["install", "rvc-python"])
         .output()
         .map_err(|e| format!("Failed to install rvc-python: {}", e))?;
@@ -340,7 +341,7 @@ pub async fn setup_python_environment(
 
 #[tauri::command]
 pub async fn check_environment_status(app: AppHandle) -> Result<serde_json::Value, String> {
-    use std::process::Command;
+    // Command execution now uses hidden commands
 
     log_info!("PythonEnvironment", "Checking environment status...");
 
@@ -367,7 +368,7 @@ pub async fn check_environment_status(app: AppHandle) -> Result<serde_json::Valu
         pythonenv_path.join("bin").join("python")
     };
 
-    let python_version = match Command::new(&python_path).arg("--version").output() {
+    let python_version = match create_hidden_command(&python_path).arg("--version").output() {
         Ok(output) => {
             if output.status.success() {
                 let version_output = String::from_utf8_lossy(&output.stdout);
@@ -444,7 +445,7 @@ async fn get_library_versions_internal_with_path(
     pythonenv_path: &std::path::Path,
 ) -> Result<serde_json::Value, String> {
     use std::fs;
-    use std::process::Command;
+    
 
     let python_path = if cfg!(windows) {
         pythonenv_path.join("Scripts").join("python.exe")
@@ -472,7 +473,7 @@ print(json.dumps({"rvc-python":v("rvc-python","rvc"),"edge-tts":v("edge-tts","ed
     fs::write(&temp_script, script_content)
         .map_err(|e| format!("Failed to write temporary script: {}", e))?;
 
-    let output = Command::new(&python_path)
+    let output = create_hidden_command(&python_path)
         .arg(&temp_script)
         .output()
         .map_err(|e| format!("Failed to execute version check script: {}", e))?;
@@ -493,7 +494,7 @@ print(json.dumps({"rvc-python":v("rvc-python","rvc"),"edge-tts":v("edge-tts","ed
 
 #[tauri::command]
 pub async fn check_python_version(app: AppHandle) -> Result<String, String> {
-    use std::process::Command;
+    
 
     log_info!("PythonEnvironment", "Checking Python version...");
 
@@ -515,7 +516,7 @@ pub async fn check_python_version(app: AppHandle) -> Result<String, String> {
         std::path::PathBuf::from(python_command)
     };
 
-    let version_check = Command::new(&python_path).arg("--version").output();
+    let version_check = create_hidden_command(&python_path).arg("--version").output();
 
     match version_check {
         Ok(output) => {
@@ -539,7 +540,7 @@ pub async fn check_python_version(app: AppHandle) -> Result<String, String> {
                         "Virtual environment Python failed, trying system Python..."
                     );
 
-                    let system_check = Command::new(python_command).arg("--version").output();
+                    let system_check = create_hidden_command(python_command).arg("--version").output();
 
                     match system_check {
                         Ok(output) => {
@@ -565,7 +566,7 @@ pub async fn check_python_version(app: AppHandle) -> Result<String, String> {
                     "Virtual environment Python failed, trying system Python..."
                 );
 
-                let system_check = Command::new(python_command).arg("--version").output();
+                let system_check = create_hidden_command(python_command).arg("--version").output();
 
                 match system_check {
                     Ok(output) => {
@@ -601,7 +602,7 @@ pub async fn check_library_versions(app: AppHandle) -> Result<serde_json::Value,
 #[tauri::command]
 pub async fn get_available_devices(app: AppHandle) -> Result<serde_json::Value, String> {
     use std::fs;
-    use std::process::Command;
+    
 
     log_info!("PythonEnvironment", "Getting available devices...");
 
@@ -630,7 +631,7 @@ devices.append({'type':'cpu','name':'CPU','id':'cpu'}); print(json.dumps(devices
     fs::write(&temp_script, script_content)
         .map_err(|e| format!("Failed to write temporary script: {}", e))?;
 
-    let output = Command::new(&python_path)
+    let output = create_hidden_command(&python_path)
         .arg(&temp_script)
         .output()
         .map_err(|e| format!("Failed to execute device check script: {}", e))?;
@@ -666,7 +667,7 @@ pub async fn force_reinstall_libraries(
     app: AppHandle,
     window: tauri::Window,
 ) -> Result<String, String> {
-    use std::process::Command;
+    
 
     log_info!(
         "PythonEnvironment",
@@ -711,7 +712,7 @@ pub async fn force_reinstall_libraries(
             }),
         );
 
-        let uninstall_result = Command::new(&pip_path)
+        let uninstall_result = create_hidden_command(&pip_path)
             .args(["uninstall", package, "-y"])
             .output();
 
@@ -733,7 +734,7 @@ pub async fn force_reinstall_libraries(
         }),
     );
 
-    let _ = Command::new(&pip_path).args(["cache", "purge"]).output();
+    let _ = create_hidden_command(&pip_path).args(["cache", "purge"]).output();
 
     let _ = window.emit(
         "PYTHON_SETUP_PROGRESS",
@@ -743,7 +744,7 @@ pub async fn force_reinstall_libraries(
         }),
     );
 
-    let install_result = Command::new(&pip_path)
+    let install_result = create_hidden_command(&pip_path)
         .args(["install", "--force-reinstall", "--no-cache-dir", "edge-tts"])
         .output();
 
@@ -767,7 +768,7 @@ pub async fn force_reinstall_libraries(
         }),
     );
 
-    let torch_install = Command::new(&pip_path)
+    let torch_install = create_hidden_command(&pip_path)
         .args([
             "install",
             "--force-reinstall",
@@ -799,7 +800,7 @@ pub async fn force_reinstall_libraries(
         }),
     );
 
-    let install_result = Command::new(&pip_path)
+    let install_result = create_hidden_command(&pip_path)
         .args(["install", "--force-reinstall", "--no-cache-dir", "rvc-python"])
         .output();
 
@@ -832,7 +833,7 @@ pub async fn reset_python_environment(
     window: tauri::Window,
 ) -> Result<String, String> {
     use std::fs;
-    use std::process::Command;
+    
 
     log_info!("PythonEnvironment", "Resetting Python environment...");
 
@@ -866,7 +867,7 @@ pub async fn reset_python_environment(
     );
 
     let python_command = if cfg!(windows) { "python" } else { "python3" };
-    let venv_result = Command::new(python_command)
+    let venv_result = create_hidden_command(python_command)
         .args(["-m", "venv", pythonenv_path.to_str().unwrap()])
         .output();
 
@@ -899,7 +900,7 @@ pub async fn reset_python_environment(
         }),
     );
 
-    let install_result = Command::new(&pip_path).args(["install", "edge-tts"]).output();
+    let install_result = create_hidden_command(&pip_path).args(["install", "edge-tts"]).output();
     match install_result {
         Ok(output) => {
             if !output.status.success() {
@@ -920,7 +921,7 @@ pub async fn reset_python_environment(
         }),
     );
 
-    let torch_install = Command::new(&pip_path)
+    let torch_install = create_hidden_command(&pip_path)
         .args([
             "install",
             "torch==2.1.1+cu118",
@@ -950,7 +951,7 @@ pub async fn reset_python_environment(
         }),
     );
 
-    let install_result = Command::new(&pip_path).args(["install", "rvc-python"]).output();
+    let install_result = create_hidden_command(&pip_path).args(["install", "rvc-python"]).output();
     match install_result {
         Ok(output) => {
             if !output.status.success() {
@@ -1012,7 +1013,7 @@ pub async fn validate_server_requirements(app: AppHandle) -> Result<serde_json::
     };
 
     for lib in &required_libs {
-        let check_output = std::process::Command::new(&pip_path)
+        let check_output = create_hidden_command(&pip_path)
             .args(["show", lib])
             .output();
 

@@ -1,7 +1,7 @@
 use crate::log_info;
-use tauri::{AppHandle, Manager, Emitter};
-use std::sync::{Arc, Mutex};
-use std::process::{Command, Child};
+use tauri::{AppHandle, Manager};
+use std::sync::Mutex;
+use std::process::Child;
 
 // Global audio process state
 static AUDIO_PROCESS: Mutex<Option<Child>> = Mutex::new(None);

@@ -77,14 +77,14 @@ pub async fn open_url(url: String) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("cmd")
+        create_hidden_command("cmd")
             .args(["/C", "start", "", &url])
             .spawn()
             .map_err(|e| format!("Failed to open URL on Windows: {}", e))?;
     }
     #[cfg(target_os = "macos")]
     {
-        std::process::Command::new("open")
+        create_hidden_command("open")
             .arg(&url)
             .spawn()
             .map_err(|e| format!("Failed to open URL on macOS: {}", e))?;
@@ -102,7 +102,7 @@ pub async fn open_url(url: String) -> Result<(), String> {
         let mut success = false;
 
         for cmd in &commands {
-            if let Ok(mut child) = std::process::Command::new(cmd)
+            if let Ok(mut child) = create_hidden_command(cmd)
                 .arg(&url)
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
@@ -264,4 +264,21 @@ pub async fn handle_twitch_event(
     }
 
     Ok(())
+}
+
+/// Create a Command that runs without showing a console window on Windows
+pub fn create_hidden_command<P: AsRef<std::ffi::OsStr>>(program: P) -> std::process::Command {
+    #[cfg(target_os = "windows")]
+    {
+        let mut cmd = std::process::Command::new(program);
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        cmd
+    }
+    
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::process::Command::new(program)
+    }
 }

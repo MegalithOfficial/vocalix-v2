@@ -1,4 +1,5 @@
 use crate::log_info;
+use crate::helpers::create_hidden_command;
 use tauri::{AppHandle, Emitter, Manager};
 use base64::{Engine as _, engine::general_purpose};
 
@@ -92,7 +93,6 @@ pub async fn generate_tts(
     resample_rate: Option<f64>,
     protect_rate: Option<f64>,
 ) -> Result<serde_json::Value, String> {
-    use std::process::Command;
 
     let (pythonenv_dir, python_path) = venv_paths(&app)?;
     let output_dir = ensure_output_dir(&app)?;
@@ -110,7 +110,7 @@ pub async fn generate_tts(
     ];
     app.emit("tts_status", serde_json::json!({"progress": 15, "status": "synthesizing (edge-tts)"})).ok();
     log_info!("TTS", "Running edge-tts: python {:?} {:?}", python_path, edge_args);
-    let edge_status = Command::new(&python_path)
+    let edge_status = create_hidden_command(&python_path)
         .args(&edge_args)
         .status()
         .map_err(|e| {
@@ -176,7 +176,7 @@ pub async fn generate_tts(
     ]);
     app.emit("tts_status", serde_json::json!({"progress": 60, "status": "converting (rvc)"})).ok();
     log_info!("TTS", "Running RVC: python -m rvc_python cli args: {:?}", rvc_args);
-    let rvc_status = std::process::Command::new(&python_path)
+    let rvc_status = create_hidden_command(&python_path)
         .args(&rvc_args)
         .status()
         .map_err(|e| {
