@@ -31,6 +31,7 @@ fn main() {
         },
         confirmation_tx: tx,
         message_tx: Arc::new(Mutex::new(None)),
+        connection_state: Arc::new(Mutex::new(None)),
     };
 
     let twitch_state = TwitchState::default();
@@ -84,6 +85,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::p2p::get_connection_status,
             commands::p2p::check_client_connection,
+            commands::p2p::get_connection_state,
             commands::p2p::start_listener,
             commands::p2p::stop_listener,
             commands::p2p::start_initiator,

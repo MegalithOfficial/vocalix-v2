@@ -202,6 +202,19 @@ const ServerPage = () => {
       }
     });
 
+    // New: explicit client connection events
+    const unlistenClientConnected = listen('CLIENT_CONNECTED', () => {
+      if (!mounted) return;
+      setIsClientConnected(true);
+      addServerLog('success', 'Client connected (event)');
+    });
+
+    const unlistenClientDisconnected = listen('CLIENT_DISCONNECTED', () => {
+      if (!mounted) return;
+      setIsClientConnected(false);
+      addServerLog('info', 'Client disconnected (event)');
+    });
+
     const connectionCheckInterval = setInterval(() => {
       if (mounted && isServerRunning) {
         checkConnectionStatus();
@@ -238,6 +251,8 @@ const ServerPage = () => {
       unlistenTwitchRedemption.then(f => f());
       unlistenServerStopped.then(f => f());
       unlistenSuccess.then(f => f());
+      unlistenClientConnected.then(f => f());
+      unlistenClientDisconnected.then(f => f());
     };
   }, []); 
 

@@ -1,5 +1,5 @@
 use crate::services::p2p::handle_connection;
-use crate::state::{AppStateWithChannel, Message};
+use crate::state::{AppStateWithChannel, Message, ConnectionState};
 use tauri::{Emitter, State, Window, Manager, AppHandle};
 use tokio::net::{TcpListener, TcpStream};
 use std::fs;
@@ -16,8 +16,22 @@ pub async fn get_connection_status(
 pub async fn check_client_connection(
     state: State<'_, AppStateWithChannel>,
 ) -> Result<bool, String> {
-    let message_tx = state.message_tx.lock().await;
-    Ok(message_tx.is_some())
+    let conn = state.connection_state.lock().await;
+    Ok(matches!(*conn, Some(ConnectionState::Encrypted)))
+}
+
+#[tauri::command]
+pub async fn get_connection_state(
+    state: State<'_, AppStateWithChannel>,
+) -> Result<String, String> {
+    let conn = state.connection_state.lock().await;
+    Ok(match &*conn {
+        Some(ConnectionState::Authenticating) => "authenticating",
+        Some(ConnectionState::WaitingForUserConfirmation) => "waiting_user",
+        Some(ConnectionState::WaitingForPeerConfirmation) => "waiting_peer",
+        Some(ConnectionState::Encrypted) => "encrypted",
+        None => "disconnected",
+    }.to_string())
 }
 
 #[tauri::command]
@@ -202,6 +216,16 @@ pub async fn stop_listener(
         if let Err(e) = tx.send(serialized) {
             println!("Failed to send shutdown message to client: {}", e);
         }
+    }
+    drop(message_tx);
+    // Clear connection state & message channel
+    {
+        let mut conn = state.connection_state.lock().await;
+        *conn = None;
+    }
+    {
+        let mut tx = state.message_tx.lock().await;
+        *tx = None;
     }
     
     window
