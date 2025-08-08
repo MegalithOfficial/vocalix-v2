@@ -56,6 +56,9 @@ export const useSettingsState = (activeTab?: string) => {
   const [manualConfirm, setManualConfirm] = useState(true);
   const [p2pPort, setP2pPort] = useState(12345);
   const [onlyClientMode, setOnlyClientMode] = useState(false);
+  // Auto-connect shared settings
+  const [autoConnectEnabled, setAutoConnectEnabled] = useState(false);
+  const [autoConnectAddress, setAutoConnectAddress] = useState('');
 
   const checkTwitchAuthStatus = async () => {
     try {
@@ -255,6 +258,16 @@ export const useSettingsState = (activeTab?: string) => {
     } catch (error) {
       console.error('Error saving security settings:', error);
     }
+    // Persist auto-connect settings
+    try {
+      const store = await load('client-settings.json', { autoSave: true });
+      await store.set('autoConnectEnabled', autoConnectEnabled);
+      await store.set('autoConnectAddress', autoConnectAddress.trim());
+      await store.save();
+      console.log('Auto-connect settings saved');
+    } catch (e) {
+      console.error('Failed to save auto-connect settings', e);
+    }
   };
 
   const saveAudioSettings = async () => {
@@ -357,6 +370,15 @@ export const useSettingsState = (activeTab?: string) => {
       console.log('Security settings loaded:', settings);
     } catch (error) {
       console.error('Error loading security settings:', error);
+    }
+    try {
+      const store = await load('client-settings.json', { autoSave: true });
+      const enabled = await store.get<boolean>('autoConnectEnabled');
+      const address = await store.get<string>('autoConnectAddress');
+      if (enabled !== undefined && enabled !== null) setAutoConnectEnabled(enabled);
+      if (address) setAutoConnectAddress(address);
+    } catch (e) {
+      console.warn('No auto-connect settings found');
     }
   }, []);
 
@@ -611,6 +633,10 @@ export const useSettingsState = (activeTab?: string) => {
     setP2pPort,
     onlyClientMode,
     setOnlyClientMode,
+  autoConnectEnabled,
+  setAutoConnectEnabled,
+  autoConnectAddress,
+  setAutoConnectAddress,
 
     checkTwitchAuthStatus,
   };

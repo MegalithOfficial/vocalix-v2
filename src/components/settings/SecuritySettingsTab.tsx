@@ -20,12 +20,17 @@ const SecuritySettingsTab = ({ settingsState }: SecuritySettingsTabProps) => {
     setOnlyClientMode,
     saveSecuritySettings,
     loadSecuritySettings,
+  autoConnectEnabled,
+  setAutoConnectEnabled,
+  autoConnectAddress,
+  setAutoConnectAddress,
   } = settingsState;
 
   const [showClientModeModal, setShowClientModeModal] = useState(false);
   const [pendingClientModeValue, setPendingClientModeValue] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
+  const [autoConnectAddressError, setAutoConnectAddressError] = useState<string | null>(null);
 
   useEffect(() => {
     loadSecuritySettings();
@@ -37,22 +42,41 @@ const SecuritySettingsTab = ({ settingsState }: SecuritySettingsTabProps) => {
         setLastSaved(new Date());
         return;
       }
-
       try {
         setIsSaving(true);
         await saveSecuritySettings();
         setLastSaved(new Date());
-        console.log('Security settings auto-saved');
+        console.log('Security settings (incl. auto-connect) auto-saved');
       } catch (error) {
         console.error('Error auto-saving security settings:', error);
       } finally {
         setIsSaving(false);
       }
     };
-
-    const timeoutId = setTimeout(saveCurrentSettings, 1000);
+    const timeoutId = setTimeout(saveCurrentSettings, 800); // debounce
     return () => clearTimeout(timeoutId);
-  }, [p2pPort, autoAccept, manualConfirm, saveSecuritySettings]);
+  }, [p2pPort, autoAccept, manualConfirm, autoConnectEnabled, autoConnectAddress, saveSecuritySettings]);
+  // Validate auto-connect address when it changes
+  useEffect(() => {
+    if (!autoConnectEnabled || !autoConnectAddress.trim()) {
+      setAutoConnectAddressError(null);
+      return;
+    }
+    const raw = autoConnectAddress.trim();
+    const match = raw.match(/^(\d{1,3}\.){3}\d{1,3}:(\d{1,5})$/);
+    if (!match) {
+      setAutoConnectAddressError('Format must be IP:Port');
+      return;
+    }
+    const [ipPart, portPart] = raw.split(':');
+    const octetsOk = ipPart.split('.').every(o => { const n = Number(o); return n >=0 && n <=255; });
+    const portNum = Number(portPart);
+    if (!octetsOk || portNum < 1 || portNum > 65535) {
+      setAutoConnectAddressError('Invalid IP or port range');
+      return;
+    }
+    setAutoConnectAddressError(null);
+  }, [autoConnectEnabled, autoConnectAddress]);
 
   const handlePortChange = async (value: number) => {
     setP2pPort(value);
@@ -185,6 +209,38 @@ const SecuritySettingsTab = ({ settingsState }: SecuritySettingsTabProps) => {
 
           {/* Divider keeps rhythm even if section below is hidden */}
           <div className="border-t border-gray-700/50" />
+
+          {/* Auto-connect to Last Server (visible both modes) */}
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-2">Auto-Connect to Last / Specific Server</label>
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-gray-500 text-xs">Automatically attempt connection on startup</p>
+              <motion.button
+                whileTap={{ scale: 0.95 }}
+                onClick={() => setAutoConnectEnabled(!autoConnectEnabled)}
+                className={`relative w-12 h-6 rounded-full transition-colors ${autoConnectEnabled ? 'bg-blue-600' : 'bg-gray-600'}`}
+              >
+                <motion.div
+                  animate={{ x: autoConnectEnabled ? 24 : 2 }}
+                  transition={{ type: 'spring', stiffness: 500, damping: 30 }}
+                  className="absolute top-0.5 w-5 h-5 bg-white rounded-full"
+                />
+              </motion.button>
+            </div>
+            {autoConnectEnabled && (
+              <div className="space-y-2">
+                <input
+                  type="text"
+                  placeholder="IP:Port (e.g. 192.168.1.10:12345)"
+                  value={autoConnectAddress}
+                  onChange={e => setAutoConnectAddress(e.target.value)}
+                  className={`w-full bg-gray-700/50 border rounded-lg px-3 py-2 text-sm text-white placeholder-gray-400 focus:outline-none focus:ring-1 ${autoConnectAddressError ? 'border-red-500/60 focus:ring-red-500' : 'border-gray-600/60 focus:ring-blue-500'}`}
+                />
+                <p className="text-xs text-gray-500">If left blank, will use most recent successful server.</p>
+                {autoConnectAddressError && <p className="text-xs text-red-400">{autoConnectAddressError}</p>}
+              </div>
+            )}
+          </div>
 
           {/* Connection Security (hidden in client-only mode) */}
           {!onlyClientMode && (

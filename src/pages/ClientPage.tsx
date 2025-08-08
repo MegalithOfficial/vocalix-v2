@@ -33,9 +33,12 @@ const ClientPage = () => {
    const [logs, setLogs] = useState<Array<{type: 'info' | 'error' | 'success', message: string}>>([]);
 
    const [recentServers, setRecentServers] = useState<string[]>([]);
-   const [autoConnect, setAutoConnect] = useState<boolean>(false);
+   const [autoConnectEnabled, setAutoConnectEnabled] = useState<boolean>(false);
+   const [autoConnectAddress, setAutoConnectAddress] = useState<string>('');
+   const [manualOverride, setManualOverride] = useState<boolean>(false);
    const settingsStoreRef = useRef<any>(null);
    const autoConnectAttemptedRef = useRef(false);
+   const retryIntervalRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
    const [latestRedemption, setLatestRedemption] = useState<RedemptionData | null>(null);
    const [activeTimers, setActiveTimers] = useState<Record<string, TimerData>>({});
@@ -133,14 +136,12 @@ const ClientPage = () => {
          
          const audioUrl = URL.createObjectURL(audioBlob);
          
-         // Clean up previous audio URL
          if (audioSrc) {
             URL.revokeObjectURL(audioSrc);
          }
          
          setAudioSrc(audioUrl);
 
-         // Use the HTML audio element in the DOM
          const audioElement = document.getElementById('main-audio') as HTMLAudioElement;
          if (audioElement) {
             audioElement.src = audioUrl;
@@ -229,7 +230,6 @@ const ClientPage = () => {
          if (latestRedemption.filePath) {
             await playAudio(latestRedemption.filePath);
          } else if (audioSrc) {
-            // If we still have the audio source, just replay it
             const audioElement = document.getElementById('main-audio') as HTMLAudioElement;
             if (audioElement) {
                audioElement.currentTime = 0;
@@ -282,7 +282,6 @@ const ClientPage = () => {
          }
       });
 
-      // New explicit connection events
       const unlistenClientConnected = listen('CLIENT_CONNECTED', () => {
          setConnectionState('connected');
          setIsConnecting(false);
@@ -357,7 +356,6 @@ const ClientPage = () => {
       });
 
       return () => {
-         // Clean up audio resources
          if (audioSrc) {
             URL.revokeObjectURL(audioSrc);
          }
@@ -367,7 +365,6 @@ const ClientPage = () => {
             audioElement.src = '';
          }
          
-         // Clean up event listeners
          unlistenStatus.then(f => f());
          unlistenPairing.then(f => f());
          unlistenSuccess.then(f => f());
@@ -423,7 +420,6 @@ const ClientPage = () => {
       }
    };
 
-   // Persist a successful connection address
    const persistRecentServer = async (addr: string) => {
       const address = addr.trim();
       if (!address) return;
@@ -433,7 +429,6 @@ const ClientPage = () => {
             settingsStoreRef.current = await load('client-settings.json', { autoSave: true });
          }
          let current: string[] = (await settingsStoreRef.current.get('recentServers')) as string[] || [];
-         // Remove existing occurrence then unshift
          current = [address, ...current.filter(a => a !== address)];
          if (current.length > 8) current = current.slice(0, 8);
          await settingsStoreRef.current.set('recentServers', current);
@@ -443,7 +438,6 @@ const ClientPage = () => {
       }
    };
 
-   // Load client settings (recent servers + auto-connect)
    useEffect(() => {
       const loadClientSettings = async () => {
          try {
@@ -451,9 +445,11 @@ const ClientPage = () => {
             const store = await load('client-settings.json', { autoSave: true });
             settingsStoreRef.current = store;
             const recents = (await store.get('recentServers')) as string[] | undefined;
-            const auto = (await store.get('autoConnectLast')) as boolean | undefined;
+            const autoEn = (await store.get('autoConnectEnabled')) as boolean | undefined;
+            const autoAddr = (await store.get('autoConnectAddress')) as string | undefined;
             if (recents && recents.length) setRecentServers(recents);
-            if (auto !== undefined) setAutoConnect(auto);
+            if (autoEn !== undefined) setAutoConnectEnabled(autoEn);
+            if (autoAddr) setAutoConnectAddress(autoAddr);
          } catch (e) {
             console.warn('Failed to load client settings:', e);
          }
@@ -461,39 +457,73 @@ const ClientPage = () => {
       loadClientSettings();
    }, []);
 
-   // Attempt auto-connect once if enabled
    useEffect(() => {
-      if (autoConnect && connectionState === 'disconnected' && recentServers.length > 0 && !autoConnectAttemptedRef.current) {
-         autoConnectAttemptedRef.current = true;
-         setServerAddress(prev => prev || recentServers[0]);
-         // slight delay to allow state update
-         setTimeout(() => {
-            if (!isConnecting) {
-               handleConnect();
-            }
-         }, 200);
-         addLog('info', `Auto-connecting to last server: ${recentServers[0]}`);
+      if (!autoConnectEnabled || manualOverride || connectionState === 'connected') {
+         if (retryIntervalRef.current) {
+            clearTimeout(retryIntervalRef.current as any);
+            retryIntervalRef.current = null;
+         }
+         return;
       }
-   }, [autoConnect, recentServers, connectionState]);
 
-   // Persist autoConnect toggle
+      let target = autoConnectAddress.trim();
+      if (!target) {
+         target = recentServers[0] || '';
+      }
+      if (!target) return;
+
+      if (!autoConnectAttemptedRef.current) {
+         autoConnectAttemptedRef.current = true;
+         setServerAddress(target);
+         addLog('info', `Auto-connect enabled. Attempting to connect to ${target}`);
+         setIsConnecting(true);
+         handleConnect();
+      }
+
+   retryIntervalRef.current = setTimeout(() => {
+      const cs: any = connectionState;
+      if (!isConnecting && cs !== 'connected' && !manualOverride && autoConnectEnabled) {
+            addLog('info', `Retrying auto-connect to ${target}...`);
+            setServerAddress(target);
+            setIsConnecting(true);
+            handleConnect();
+         }
+      }, 5000);
+
+      return () => {
+         if (retryIntervalRef.current) {
+            clearTimeout(retryIntervalRef.current as any);
+            retryIntervalRef.current = null;
+         }
+      };
+   }, [autoConnectEnabled, autoConnectAddress, recentServers, connectionState, isConnecting, manualOverride]);
+
    const handleToggleAutoConnect = async () => {
-      const next = !autoConnect;
-      setAutoConnect(next);
+      const next = !autoConnectEnabled;
+      setAutoConnectEnabled(next);
       try {
          if (!settingsStoreRef.current) {
             const { load } = await import('@tauri-apps/plugin-store');
             settingsStoreRef.current = await load('client-settings.json', { autoSave: true });
          }
-         await settingsStoreRef.current.set('autoConnectLast', next);
+         await settingsStoreRef.current.set('autoConnectEnabled', next);
       } catch (e) {
          console.warn('Failed to persist auto-connect setting:', e);
       }
    };
 
+   const handleManualOverride = () => {
+      setManualOverride(true);
+      setIsConnecting(false);
+      if (retryIntervalRef.current) {
+         clearTimeout(retryIntervalRef.current as any);
+         retryIntervalRef.current = null;
+      }
+      addLog('info', 'Manual override activated. You can enter a different IP.');
+   };
+
    return (
       <div className="min-h-screen bg-gradient-to-br from-gray-900 via-black to-gray-900 flex flex-col">
-         {/* Hidden persistent audio element */}
          <audio id="main-audio" style={{ display: 'none' }} />
          {/* Header */}
          <div className="bg-gray-900/50 backdrop-blur-sm border-b border-gray-800">
@@ -552,7 +582,7 @@ const ClientPage = () => {
                )}
 
                {/* Connection Section */}
-               {connectionState === 'disconnected' && (
+               {connectionState === 'disconnected' && !autoConnectEnabled && (
                   <motion.div
                      initial={{ y: 20, opacity: 0 }}
                      animate={{ y: 0, opacity: 1 }}
@@ -602,11 +632,63 @@ const ClientPage = () => {
                            </div>
                            <button
                               onClick={handleToggleAutoConnect}
-                              className={`relative w-12 h-6 rounded-full transition-colors ${autoConnect ? 'bg-blue-500' : 'bg-gray-600'}`}
+                              className={`relative w-12 h-6 rounded-full transition-colors ${autoConnectEnabled ? 'bg-blue-500' : 'bg-gray-600'}`}
                            >
-                              <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform ${autoConnect ? 'translate-x-6' : ''}`}></span>
+                              <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform ${autoConnectEnabled ? 'translate-x-6' : ''}`}></span>
                            </button>
                         </div>
+                        <motion.button
+                           whileHover={{ scale: 1.02 }}
+                           whileTap={{ scale: 0.98 }}
+                           onClick={handleConnect}
+                           disabled={isConnecting || !serverAddress.trim()}
+                           className="w-full bg-blue-500 hover:bg-blue-600 text-white font-medium py-3 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                        >
+                           {isConnecting ? (
+                              <>
+                                 <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                                 Connecting...
+                              </>
+                           ) : (
+                              <>
+                                 <Wifi className="w-4 h-4" />
+                                 Connect
+                              </>
+                           )}
+                        </motion.button>
+                     </div>
+                  </motion.div>
+               )}
+
+               {connectionState === 'disconnected' && autoConnectEnabled && !manualOverride && (
+                  <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="bg-gray-800/40 border border-gray-700/40 rounded-xl p-8 text-center">
+                     <h2 className="text-xl font-bold text-white mb-4">Auto-Connect Enabled</h2>
+                     <p className="text-gray-300 mb-4">Trying to connect to {autoConnectAddress || recentServers[0] || 'configured server'}...</p>
+                     <div className="flex items-center justify-center mb-6">
+                        <div className="w-6 h-6 border-4 border-blue-500/30 border-t-blue-400 rounded-full animate-spin" />
+                     </div>
+                     <button onClick={handleManualOverride} className="px-4 py-2 rounded-lg bg-gray-700/60 hover:bg-gray-700 text-gray-200 text-sm border border-gray-600/60">Enter a different IP...</button>
+                  </motion.div>
+               )}
+
+               {connectionState === 'disconnected' && autoConnectEnabled && manualOverride && (
+                  <motion.div initial={{ y: 12, opacity: 0 }} animate={{ y:0, opacity: 1 }} className="bg-gray-800/40 border border-gray-700/40 rounded-xl p-6">
+                     <div className="flex items-center justify-between mb-4">
+                        <h2 className="text-xl font-bold text-white">Manual Connect (Override)</h2>
+                        <button
+                           onClick={() => { setManualOverride(false); autoConnectAttemptedRef.current = false; }}
+                           className="text-xs text-blue-400 hover:text-blue-300 underline"
+                        >Return to auto-connect</button>
+                     </div>
+                     <div className="space-y-4">
+                        <input
+                           type="text"
+                           value={serverAddress}
+                           onChange={(e) => setServerAddress(e.target.value)}
+                           placeholder="192.168.1.100:12345"
+                           className="w-full bg-gray-700/50 border border-gray-600/50 rounded-lg px-4 py-3 text-white placeholder-gray-400 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+                           disabled={isConnecting}
+                        />
                         <motion.button
                            whileHover={{ scale: 1.02 }}
                            whileTap={{ scale: 0.98 }}
