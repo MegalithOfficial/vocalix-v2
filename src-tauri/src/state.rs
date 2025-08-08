@@ -29,13 +29,12 @@ pub struct AppStateWithChannel {
     pub inner: AppState,
     pub confirmation_tx: broadcast::Sender<bool>,
     pub message_tx: Arc<Mutex<Option<mpsc::UnboundedSender<String>>>>,
-    // New: shared connection state visible to commands/UI
     pub connection_state: Arc<Mutex<Option<ConnectionState>>>,
 }
 
 #[derive(Default)]
 pub struct TwitchState {
-    pub auth_manager: Arc<Mutex<Option<TwitchAuthManager>>>,
+    pub auth_manager: Arc<Mutex<Option<Arc<TwitchAuthManager>>>>,
     pub event_sub: Arc<Mutex<Option<TwitchEventSub>>>,
 }
 

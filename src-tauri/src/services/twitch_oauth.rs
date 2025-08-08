@@ -426,89 +426,57 @@ impl TwitchOAuth {
             .ok_or_else(|| anyhow!("No user data returned"))
     }
 }
+pub struct TwitchSecureStore;
 
-pub struct TwitchTokenStorage;
+impl TwitchSecureStore {
+    const SERVICE: &'static str = "Vocalix-Twitch";
+    const TOKENS_KEY: &'static str = "oauth-tokens";
+    const CREDS_KEY: &'static str = "client-credentials";
 
-impl TwitchTokenStorage {
-    const SERVICE_NAME: &'static str = "Vocalix-Twitch";
-    const USERNAME: &'static str = "oauth-tokens";
+    fn entry(key: &str) -> Result<Entry> { Entry::new(Self::SERVICE, key).map_err(|e| e.into()) }
 
-    pub fn save_tokens(tokens: &TwitchTokens) -> Result<()> {
-        let entry = Entry::new(Self::SERVICE_NAME, Self::USERNAME)?;
-        let json = serde_json::to_string(tokens)?;
+    fn save_json<T: Serialize>(key: &str, value: &T) -> Result<()> {
+        let json = serde_json::to_string(value)?;
+        let entry = Self::entry(key)?;
         entry.set_password(&json)?;
         Ok(())
     }
-
-    pub fn load_tokens() -> Result<TwitchTokens> {
-        let entry = Entry::new(Self::SERVICE_NAME, Self::USERNAME)?;
+    fn load_json<T: for<'de> Deserialize<'de>>(key: &str) -> Result<T> {
+        let entry = Self::entry(key)?;
         let json = entry.get_password()?;
-        let tokens: TwitchTokens = serde_json::from_str(&json)?;
-        Ok(tokens)
+        Ok(serde_json::from_str(&json)?)
     }
-
-    pub fn delete_tokens() -> Result<()> {
-        let entry = Entry::new(Self::SERVICE_NAME, Self::USERNAME)?;
+    fn delete(key: &str) -> Result<()> {
+        let entry = Self::entry(key)?;
         entry.delete_credential()?;
         Ok(())
     }
-
-    pub fn tokens_exist() -> bool {
-        let entry = Entry::new(Self::SERVICE_NAME, Self::USERNAME);
-        if let Ok(entry) = entry {
-            entry.get_password().is_ok()
-        } else {
-            false
-        }
+    fn exists(key: &str) -> bool {
+        if let Ok(entry) = Self::entry(key) { entry.get_password().is_ok() } else { false }
     }
-}
 
-pub struct TwitchCredentialStorage;
+    // Tokens API
+    pub fn save_tokens(tokens: &TwitchTokens) -> Result<()> { Self::save_json(Self::TOKENS_KEY, tokens) }
+    pub fn load_tokens() -> Result<TwitchTokens> { Self::load_json(Self::TOKENS_KEY) }
+    pub fn delete_tokens() -> Result<()> { Self::delete(Self::TOKENS_KEY) }
+    pub fn tokens_exist() -> bool { Self::exists(Self::TOKENS_KEY) }
 
-impl TwitchCredentialStorage {
-    const SERVICE_NAME: &'static str = "Vocalix-Twitch";
-    const USERNAME: &'static str = "client-credentials";
-
+    // Credentials API
     pub fn save_credentials(client_id: &str, client_secret: Option<&str>) -> Result<()> {
-        let entry = Entry::new(Self::SERVICE_NAME, Self::USERNAME)?;
-        let credentials = serde_json::json!({
+        let payload = serde_json::json!({
             "client_id": client_id,
             "client_secret": client_secret
         });
-        let json = serde_json::to_string(&credentials)?;
-        entry.set_password(&json)?;
-        Ok(())
+        Self::save_json(Self::CREDS_KEY, &payload)
     }
-
     pub fn load_credentials() -> Result<(String, Option<String>)> {
-        let entry = Entry::new(Self::SERVICE_NAME, Self::USERNAME)?;
-        let json = entry.get_password()?;
-        let credentials: serde_json::Value = serde_json::from_str(&json)?;
-
-        let client_id = credentials["client_id"]
-            .as_str()
-            .ok_or_else(|| anyhow!("Invalid client_id in stored credentials"))?
-            .to_string();
-
-        let client_secret = credentials["client_secret"].as_str().map(|s| s.to_string());
-
+        let v: serde_json::Value = Self::load_json(Self::CREDS_KEY)?;
+        let client_id = v["client_id"].as_str().ok_or_else(|| anyhow!("Invalid client_id in stored credentials"))?.to_string();
+        let client_secret = v["client_secret"].as_str().map(|s| s.to_string());
         Ok((client_id, client_secret))
     }
-
-    pub fn delete_credentials() -> Result<()> {
-        let entry = Entry::new(Self::SERVICE_NAME, Self::USERNAME)?;
-        entry.delete_credential()?;
-        Ok(())
-    }
-
-    pub fn credentials_exist() -> bool {
-        let entry = Entry::new(Self::SERVICE_NAME, Self::USERNAME);
-        if let Ok(entry) = entry {
-            entry.get_password().is_ok()
-        } else {
-            false
-        }
-    }
+    pub fn delete_credentials() -> Result<()> { Self::delete(Self::CREDS_KEY) }
+    pub fn credentials_exist() -> bool { Self::exists(Self::CREDS_KEY) }
 }
 
 #[derive(Clone)]
@@ -549,7 +517,7 @@ impl TwitchAuthManager {
             .poll_for_tokens(&device_response.device_code, poll_interval)
             .await?;
 
-        TwitchTokenStorage::save_tokens(&tokens)?;
+        TwitchSecureStore::save_tokens(&tokens)?;
         println!("Authentication successful! Tokens saved securely.");
 
         Ok((tokens, user_instructions))
@@ -572,14 +540,14 @@ impl TwitchAuthManager {
             .poll_for_tokens(&device_response.device_code, poll_interval)
             .await?;
 
-        TwitchTokenStorage::save_tokens(&tokens)?;
+        TwitchSecureStore::save_tokens(&tokens)?;
         println!("Authentication successful! Tokens saved securely.");
 
         Ok(tokens)
     }
 
     pub async fn get_valid_tokens(&self) -> Result<TwitchTokens> {
-        let mut tokens = TwitchTokenStorage::load_tokens()
+        let mut tokens = TwitchSecureStore::load_tokens()
             .map_err(|_| anyhow!("No saved tokens found. Please authenticate first."))?;
 
         let expires_soon = tokens.expires_at < (Utc::now() + chrono::Duration::minutes(5));
@@ -588,7 +556,7 @@ impl TwitchAuthManager {
             if let Some(refresh_token) = &tokens.refresh_token {
                 println!("Access token expires soon, refreshing...");
                 tokens = self.oauth.refresh_tokens(refresh_token).await?;
-                TwitchTokenStorage::save_tokens(&tokens)?;
+                TwitchSecureStore::save_tokens(&tokens)?;
                 println!("Tokens refreshed successfully!");
             } else {
                 return Err(anyhow!(
@@ -601,8 +569,22 @@ impl TwitchAuthManager {
     }
 
     pub async fn validate_current_tokens(&self) -> Result<ValidationResponse> {
-        let tokens = self.get_valid_tokens().await?;
-        self.oauth.validate_token(&tokens.access_token).await
+        let mut tokens = self.get_valid_tokens().await?;
+        match self.oauth.validate_token(&tokens.access_token).await {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                let msg = e.to_string();
+                if (msg.contains("invalid") || msg.contains("expired")) && tokens.refresh_token.is_some() {
+                    if let Some(refresh) = &tokens.refresh_token {
+                        let refreshed = self.oauth.refresh_tokens(refresh).await?;
+                        TwitchSecureStore::save_tokens(&refreshed)?;
+                        tokens = refreshed;
+                        return self.oauth.validate_token(&tokens.access_token).await;
+                    }
+                }
+                Err(anyhow!(msg))
+            }
+        }
     }
 
     pub async fn get_user_info(&self) -> Result<UserInfo> {
@@ -611,17 +593,17 @@ impl TwitchAuthManager {
     }
 
     pub async fn sign_out(&self) -> Result<()> {
-        if let Ok(tokens) = TwitchTokenStorage::load_tokens() {
+        if let Ok(tokens) = TwitchSecureStore::load_tokens() {
             let _ = self.oauth.revoke_token(&tokens.access_token).await;
         }
 
-        TwitchTokenStorage::delete_tokens()?;
+        TwitchSecureStore::delete_tokens()?;
         println!("Signed out successfully!");
         Ok(())
     }
 
     pub fn is_authenticated() -> bool {
-        TwitchTokenStorage::tokens_exist()
+        TwitchSecureStore::tokens_exist()
     }
 
     pub fn get_client_id(&self) -> &str {
@@ -629,19 +611,19 @@ impl TwitchAuthManager {
     }
 
     pub fn save_client_credentials(client_id: &str, client_secret: Option<&str>) -> Result<()> {
-        TwitchCredentialStorage::save_credentials(client_id, client_secret)
+        TwitchSecureStore::save_credentials(client_id, client_secret)
     }
 
     pub fn load_client_credentials() -> Result<(String, Option<String>)> {
-        TwitchCredentialStorage::load_credentials()
+        TwitchSecureStore::load_credentials()
     }
 
     pub fn delete_client_credentials() -> Result<()> {
-        TwitchCredentialStorage::delete_credentials()
+        TwitchSecureStore::delete_credentials()
     }
 
     pub fn has_saved_credentials() -> bool {
-        TwitchCredentialStorage::credentials_exist()
+        TwitchSecureStore::credentials_exist()
     }
 
     pub fn from_saved_credentials() -> Result<Self> {
@@ -650,11 +632,11 @@ impl TwitchAuthManager {
     }
 
     pub async fn get_auth_status(&self) -> Result<AuthStatus> {
-        if !TwitchTokenStorage::tokens_exist() {
+        if !TwitchSecureStore::tokens_exist() {
             return Ok(AuthStatus::NotAuthenticated);
         }
 
-        let tokens = match TwitchTokenStorage::load_tokens() {
+        let tokens = match TwitchSecureStore::load_tokens() {
             Ok(tokens) => tokens,
             Err(_) => return Ok(AuthStatus::NotAuthenticated),
         };
@@ -698,12 +680,12 @@ mod tests {
             scope: vec!["channel:read:redemptions".to_string()],
         };
 
-        if let Ok(_) = TwitchTokenStorage::save_tokens(&tokens) {
-            let loaded = TwitchTokenStorage::load_tokens().unwrap();
+        if let Ok(_) = TwitchSecureStore::save_tokens(&tokens) {
+            let loaded = TwitchSecureStore::load_tokens().unwrap();
             assert_eq!(loaded.access_token, tokens.access_token);
             assert_eq!(loaded.refresh_token, tokens.refresh_token);
 
-            TwitchTokenStorage::delete_tokens().unwrap();
+            TwitchSecureStore::delete_tokens().unwrap();
         }
     }
 

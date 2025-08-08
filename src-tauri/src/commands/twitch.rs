@@ -1,6 +1,7 @@
 use crate::helpers::handle_twitch_event;
 use crate::services::twitch::{create_common_subscriptions, TwitchEventSub};
 use crate::services::twitch_oauth::TwitchAuthManager;
+use std::sync::Arc;
 use crate::state::TwitchState;
 use crate::{log_error, log_info};
 use serde::{Deserialize, Serialize};
@@ -26,7 +27,7 @@ pub async fn twitch_authenticate(
         )
         .unwrap();
 
-    let auth_manager = TwitchAuthManager::new(client_id, client_secret);
+    let auth_manager = Arc::new(TwitchAuthManager::new(client_id, client_secret));
 
 
     match auth_manager.start_device_flow_async().await {
@@ -138,9 +139,9 @@ pub async fn twitch_start_event_listener(
     }
 
     let auth_manager = {
-        let auth_guard = twitch_state.auth_manager.lock().await;
-        match auth_guard.as_ref() {
-            Some(manager) => manager.clone(),
+        let guard = twitch_state.auth_manager.lock().await;
+        match guard.as_ref() {
+            Some(m) => m.clone(),
             None => return Err("Not authenticated with Twitch".to_string()),
         }
     };
@@ -306,8 +307,9 @@ pub async fn twitch_get_auth_status(
 ) -> Result<String, String> {
     let auth_manager = match TwitchAuthManager::from_saved_credentials() {
         Ok(manager) => {
-            *twitch_state.auth_manager.lock().await = Some(manager.clone());
-            manager
+            let arc = Arc::new(manager);
+            *twitch_state.auth_manager.lock().await = Some(arc.clone());
+            arc
         }
         Err(_) => return Ok("no_credentials".to_string()),
     };
@@ -344,9 +346,9 @@ pub async fn get_twitch_redemptions(
     log_info!("TwitchAPI", "Fetching Twitch redemptions");
 
     let auth_manager = {
-        let auth_guard = twitch_state.auth_manager.lock().await;
-        match auth_guard.as_ref() {
-            Some(manager) => manager.clone(),
+        let guard = twitch_state.auth_manager.lock().await;
+        match guard.as_ref() {
+            Some(m) => m.clone(),
             None => return Err("Not authenticated with Twitch".to_string()),
         }
     };
