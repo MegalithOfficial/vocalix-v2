@@ -72,4 +72,8 @@ pub enum Message {
     },
 
     PlaintextMessage(String),
+
+    Disconnect {
+        reason: String,
+    },
 }

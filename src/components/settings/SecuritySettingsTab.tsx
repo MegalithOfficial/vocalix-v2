@@ -63,17 +63,28 @@ const SecuritySettingsTab = ({ settingsState }: SecuritySettingsTabProps) => {
       return;
     }
     const raw = autoConnectAddress.trim();
-    const match = raw.match(/^(\d{1,3}\.){3}\d{1,3}:(\d{1,5})$/);
-    if (!match) {
-      setAutoConnectAddressError('Format must be IP:Port');
+    // Accept either IPv4:port or hostname:port (hostname labels letters/digits/hyphen)
+    const hostPortPattern = /^((([a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+)|(\d{1,3}(?:\.\d{1,3}){3})):(\d{1,5})$/;
+    const m = raw.match(hostPortPattern);
+    if (!m) {
+      setAutoConnectAddressError('Format must be Host/IP:Port');
       return;
     }
-    const [ipPart, portPart] = raw.split(':');
-    const octetsOk = ipPart.split('.').every(o => { const n = Number(o); return n >=0 && n <=255; });
+    const portPart = m[5];
     const portNum = Number(portPart);
-    if (!octetsOk || portNum < 1 || portNum > 65535) {
-      setAutoConnectAddressError('Invalid IP or port range');
+    if (portNum < 1 || portNum > 65535) {
+      setAutoConnectAddressError('Port out of range');
       return;
+    }
+    // If IP, validate octets
+    const ipMatch = raw.match(/^(\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})$/);
+    if (ipMatch) {
+      const ipPart = ipMatch[1];
+      const octetsOk = ipPart.split('.').every(o => { const n = Number(o); return n >=0 && n <=255; });
+      if (!octetsOk) {
+        setAutoConnectAddressError('Invalid IP octet');
+        return;
+      }
     }
     setAutoConnectAddressError(null);
   }, [autoConnectEnabled, autoConnectAddress]);
@@ -231,7 +242,7 @@ const SecuritySettingsTab = ({ settingsState }: SecuritySettingsTabProps) => {
               <div className="space-y-2">
                 <input
                   type="text"
-                  placeholder="IP:Port (e.g. 192.168.1.10:12345)"
+                  placeholder="Host/IP:Port (e.g. 192.168.1.10:12345 or myhost.local:12345)"
                   value={autoConnectAddress}
                   onChange={e => setAutoConnectAddress(e.target.value)}
                   className={`w-full bg-gray-700/50 border rounded-lg px-3 py-2 text-sm text-white placeholder-gray-400 focus:outline-none focus:ring-1 ${autoConnectAddressError ? 'border-red-500/60 focus:ring-red-500' : 'border-gray-600/60 focus:ring-blue-500'}`}

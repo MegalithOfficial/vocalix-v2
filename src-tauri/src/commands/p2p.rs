@@ -209,12 +209,21 @@ pub async fn stop_listener(
     
     let message_tx = state.message_tx.lock().await;
     if let Some(tx) = message_tx.as_ref() {
-        let shutdown_msg = Message::PlaintextMessage("Server shutting down".to_string());
-        let serialized = serde_json::to_string(&shutdown_msg)
-            .map_err(|e| format!("Failed to serialize shutdown message: {}", e))?;
+        // Send proper disconnect message instead of plaintext
+        let disconnect_msg = Message::Disconnect { reason: "Server shutting down".to_string() };
+        let serialized = serde_json::to_string(&disconnect_msg)
+            .map_err(|e| format!("Failed to serialize disconnect message: {}", e))?;
         
-        if let Err(e) = tx.send(serialized) {
-            println!("Failed to send shutdown message to client: {}", e);
+        match tx.send(serialized) {
+            Ok(_) => {
+                window.emit("STATUS_UPDATE", "Disconnect message sent to client").ok();
+                // Give time for the message to be sent
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            },
+            Err(e) => {
+                println!("Failed to send disconnect message to client: {}", e);
+                window.emit("STATUS_UPDATE", format!("Failed to notify client: {}", e)).ok();
+            }
         }
     }
     drop(message_tx);
@@ -228,13 +237,104 @@ pub async fn stop_listener(
         *tx = None;
     }
     
-    window
-        .emit("STATUS_UPDATE", "Server stopped")
-        .unwrap();
-    
-    window
-        .emit("SERVER_STOPPED", ())
-        .unwrap();
+    // Emit comprehensive disconnect events
+    window.emit("PEER_DISCONNECT", "Server stopped").ok();
+    window.emit("STATUS_UPDATE", "Server stopped").unwrap();
+    window.emit("SERVER_STOPPED", ()).unwrap();
         
     Ok(())
+}
+
+#[tauri::command]
+pub async fn disconnect_client(
+    window: Window,
+    state: State<'_, AppStateWithChannel>,
+) -> Result<(), String> {
+    // Explicit client-side disconnect (initiator) or server telling itself to teardown connection without shutting listener
+    window.emit("STATUS_UPDATE", "Disconnecting client session...").ok();
+    
+    // Try to send a graceful Disconnect if channel exists
+    let maybe_tx = {
+        let tx_guard = state.message_tx.lock().await;
+        tx_guard.clone()
+    };
+    
+    if let Some(tx) = maybe_tx {
+        if let Ok(serialized) = serde_json::to_string(&Message::Disconnect { reason: "Client requested disconnect".into() }) {
+            match tx.send(serialized) {
+                Ok(_) => {
+                    window.emit("STATUS_UPDATE", "Disconnect message sent to peer").ok();
+                    // Give a moment for the message to be sent
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                },
+                Err(e) => {
+                    window.emit("STATUS_UPDATE", format!("Failed to send disconnect message: {}", e)).ok();
+                }
+            }
+        }
+    }
+    
+    // Clear channel & state
+    {
+        let mut tx = state.message_tx.lock().await;
+        *tx = None;
+    }
+    {
+        let mut cs = state.connection_state.lock().await;
+        *cs = None;
+    }
+    
+    // Emit comprehensive disconnect events
+    window.emit("CLIENT_DISCONNECTED", "").ok();
+    window.emit("PEER_DISCONNECT", "Local disconnect initiated").ok();
+    window.emit("STATUS_UPDATE", "Client session disconnected").ok();
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn send_disconnect_notice(
+    reason: String,
+    window: Window,
+    state: State<'_, AppStateWithChannel>,
+) -> Result<(), String> {
+    let message_tx = state.message_tx.lock().await;
+    if let Some(tx) = message_tx.as_ref() {
+        let msg = Message::Disconnect { reason: reason.clone() };
+        let serialized = serde_json::to_string(&msg).map_err(|e| e.to_string())?;
+        
+        match tx.send(serialized) {
+            Ok(_) => {
+                window.emit("STATUS_UPDATE", format!("Disconnect notice sent: {}", reason)).ok();
+                Ok(())
+            },
+            Err(e) => {
+                window.emit("STATUS_UPDATE", format!("Failed to send disconnect notice: {}", e)).ok();
+                Err(e.to_string())
+            }
+        }
+    } else {
+        window.emit("STATUS_UPDATE", "No active connection to send disconnect notice").ok();
+        Err("No active connection".into())
+    }
+}
+
+#[tauri::command]
+pub async fn check_connection_health(
+    window: Window,
+    state: State<'_, AppStateWithChannel>,
+) -> Result<bool, String> {
+    let message_tx = state.message_tx.lock().await;
+    let connection_state = state.connection_state.lock().await;
+    
+    match (message_tx.as_ref(), connection_state.as_ref()) {
+        (Some(_), Some(_)) => {
+            window.emit("STATUS_UPDATE", "Connection is healthy").ok();
+            Ok(true)
+        },
+        _ => {
+            window.emit("STATUS_UPDATE", "Connection is not healthy").ok();
+            window.emit("PEER_DISCONNECT", "Connection health check failed").ok();
+            Ok(false)
+        }
+    }
 }

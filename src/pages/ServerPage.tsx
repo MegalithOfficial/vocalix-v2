@@ -58,6 +58,7 @@ const ServerPage = () => {
   const [redemptionConfigs, setRedemptionConfigs] = useState<Record<string, any>>({});
   
   const [isClientConnected, setIsClientConnected] = useState(false);
+  const [pairingCode, setPairingCode] = useState<string | null>(null);
   const [generatedTTS, setGeneratedTTS] = useState<Record<string, {filePath: string, title: string, content: string, timerDuration?: number}>>({});
   
   const [activeTimers, setActiveTimers] = useState<Record<string, {
@@ -133,10 +134,16 @@ const ServerPage = () => {
       if (message.includes('Listening on')) {
         setIsServerRunning(true);
         setError(null);
+        addServerLog('success', 'Server listener started successfully');
         getNetworkInfo();
       } else if (message.includes('Connection closed')) {
         setIsClientConnected(false);
+        setPairingCode(null); // Clear pairing code on connection close
         addServerLog('info', 'Client disconnected');
+      } else if (message.includes('Peer confirmed pairing') || message.includes('Both peers confirmed')) {
+        addServerLog('success', 'Pairing successful - establishing secure connection...');
+      } else if (message.includes('Starting listener')) {
+        addServerLog('info', 'Initializing server listener...');
       }
     });
 
@@ -198,6 +205,7 @@ const ServerPage = () => {
       // Check if this is about the encrypted channel being established
       if (message.includes('Secure encrypted channel established')) {
         setIsClientConnected(true);
+        setPairingCode(null); // Clear pairing code when successfully connected
         addServerLog('success', 'Client connected and encrypted channel established!');
       }
     });
@@ -206,13 +214,33 @@ const ServerPage = () => {
     const unlistenClientConnected = listen('CLIENT_CONNECTED', () => {
       if (!mounted) return;
       setIsClientConnected(true);
+      setPairingCode(null); // Clear pairing code when successfully connected
       addServerLog('success', 'Client connected (event)');
     });
 
     const unlistenClientDisconnected = listen('CLIENT_DISCONNECTED', () => {
       if (!mounted) return;
       setIsClientConnected(false);
+      setPairingCode(null); // Clear pairing code on disconnect
       addServerLog('info', 'Client disconnected (event)');
+      // Server should still be running, just no client connected
+    });
+
+    const unlistenPeerDisconnect = listen('PEER_DISCONNECT', (event) => {
+      if (!mounted) return;
+      const reason = event.payload as string;
+      setIsClientConnected(false);
+      setPairingCode(null);
+      addServerLog('error', `Peer disconnected: ${reason}`);
+      console.log('Peer disconnect event:', reason);
+    });
+
+    const unlistenPairingRequired = listen('PAIRING_REQUIRED', (event) => {
+      if (!mounted) return;
+      const code = event.payload as string;
+      console.log('Pairing code required:', code);
+      setPairingCode(code);
+      addServerLog('info', `Pairing required - Code: ${code}`);
     });
 
     const connectionCheckInterval = setInterval(() => {
@@ -253,6 +281,8 @@ const ServerPage = () => {
       unlistenSuccess.then(f => f());
       unlistenClientConnected.then(f => f());
       unlistenClientDisconnected.then(f => f());
+      unlistenPeerDisconnect.then(f => f());
+      unlistenPairingRequired.then(f => f());
     };
   }, []); 
 
@@ -280,7 +310,9 @@ const ServerPage = () => {
     try {
       setError(null);
       console.log('Starting server...');
+      setIsServerRunning(true); // Set state immediately
       await invoke('start_listener');
+      addServerLog('success', 'Server started successfully');
     } catch (error) {
       console.error('Failed to start server:', error);
       
@@ -288,8 +320,11 @@ const ServerPage = () => {
       if (errorStr.includes('already in use') || errorStr.includes('Address already in use')) {
         console.log('Port already in use, server might already be running');
         setIsServerRunning(true);
+        addServerLog('info', 'Server was already running on port 12345');
       } else {
+        setIsServerRunning(false); // Reset on actual failure
         setError(`Failed to start server: ${error}`);
+        addServerLog('error', `Failed to start server: ${error}`);
       }
     }
   };
@@ -573,11 +608,22 @@ const ServerPage = () => {
 
   const handleEndSession = async () => {
     if (!isServerRunning || isEndingSession) return;
-    
     setIsEndingSession(true);
+    addServerLog('info', 'Ending session: stopping EventSub (if active) and server listener');
     try {
+      // Attempt to stop Twitch EventSub first (ignore failures if not active)
+      try {
+        await invoke('twitch_stop_event_listener');
+        addServerLog('info', 'EventSub listener stopped');
+      } catch (esError) {
+        addServerLog('info', `EventSub stop attempt: ${esError}`);
+      }
       await invoke('stop_listener');
       addServerLog('info', 'Server shutdown initiated');
+      // Fallback navigation if SERVER_STOPPED event never arrives
+      setTimeout(() => {
+        navigate('/');
+      }, 4000);
     } catch (error) {
       console.error('Failed to stop server:', error);
       addServerLog('error', `Failed to stop server: ${error}`);
@@ -590,6 +636,16 @@ const ServerPage = () => {
       navigator.clipboard.writeText(`${networkInfo.lan_ip}:${networkInfo.port}`);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  const handleConfirmPairing = async () => {
+    try {
+      await invoke('user_confirm_pairing');
+      addServerLog('info', 'Pairing confirmed. Waiting for client to confirm...');
+    } catch (error) {
+      console.error('Failed to confirm pairing:', error);
+      addServerLog('error', `Failed to confirm pairing: ${error}`);
     }
   };
 
@@ -652,6 +708,75 @@ const ServerPage = () => {
               <div className="flex items-center">
                 <AlertCircle className="w-5 h-5 text-red-400 mr-3" />
                 <p className="text-red-300">{error}</p>
+              </div>
+            </motion.div>
+          )}
+
+          {/* Pairing Code Display */}
+          {pairingCode && (
+            <motion.div
+              initial={{ opacity: 0, y: -20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              className="bg-yellow-900/30 border border-yellow-500/50 rounded-xl p-6 mb-6 backdrop-blur-sm"
+            >
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-3 rounded-xl bg-yellow-500/20">
+                    <User className="w-6 h-6 text-yellow-400" />
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-bold text-white">Client Pairing Required</h2>
+                    <p className="text-sm text-yellow-400">A new client is requesting to connect</p>
+                  </div>
+                </div>
+                <div className="px-3 py-1.5 rounded-full text-xs font-semibold bg-yellow-500/20 text-yellow-400 border border-yellow-500/30">
+                  Waiting for Confirmation
+                </div>
+              </div>
+              
+              <p className="text-gray-300 mb-4">
+                A client is trying to connect to your server. Share this pairing code with the client or confirm if this is expected:
+              </p>
+              
+              <div className="bg-black/40 border border-yellow-500/30 rounded-lg p-6 mb-4">
+                <div className="text-center">
+                  <p className="text-sm text-gray-400 mb-2">Pairing Code</p>
+                  <p className="text-4xl font-mono font-bold text-yellow-400 tracking-wider">
+                    {pairingCode}
+                  </p>
+                </div>
+              </div>
+              
+              <div className="flex gap-3">
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={handleConfirmPairing}
+                  className="flex-1 py-3 bg-green-500/20 hover:bg-green-500/30 text-green-300 border border-green-500/30 font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
+                >
+                  <Check className="w-4 h-4" />
+                  Confirm Pairing
+                </motion.button>
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => {
+                    setPairingCode(null);
+                    addServerLog('info', 'Pairing request dismissed');
+                  }}
+                  className="px-6 py-3 bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-500/30 font-medium rounded-lg transition-colors flex items-center gap-2"
+                >
+                  <X className="w-4 h-4" />
+                  Dismiss
+                </motion.button>
+              </div>
+              
+              <div className="mt-4 p-3 bg-blue-900/20 border border-blue-500/30 rounded-lg">
+                <p className="text-xs text-blue-300">
+                  <strong>Security Note:</strong> Only confirm this pairing if you expect a client to connect. 
+                  The pairing code ensures secure communication between server and client.
+                </p>
               </div>
             </motion.div>
           )}

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { motion } from 'framer-motion';
@@ -31,10 +31,12 @@ export default function TwitchIntegration({}: TwitchIntegrationProps) {
   const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [clientId, setClientId] = useState('');
+  const [clientSecret, setClientSecret] = useState('');
   const [showCredentialsForm, setShowCredentialsForm] = useState(false);
   
   const [deviceInstructions, setDeviceInstructions] = useState<DeviceCodeInstructions | null>(null);
   const [timeRemaining, setTimeRemaining] = useState<number | null>(null);
+  const setupCheckInFlight = useRef(false);
 
   useEffect(() => {
     checkTwitchSetup();
@@ -100,6 +102,8 @@ export default function TwitchIntegration({}: TwitchIntegrationProps) {
   }, [timeRemaining]);
 
   const checkTwitchSetup = async () => {
+    if (setupCheckInFlight.current) return;
+    setupCheckInFlight.current = true;
     setSetupStatus('checking');
     setError(null);
 
@@ -111,8 +115,9 @@ export default function TwitchIntegration({}: TwitchIntegrationProps) {
         return;
       }
 
-      const [savedClientId] = await invoke<[string, string | null]>('twitch_load_credentials');
-      setClientId(savedClientId);
+  const [savedClientId, savedClientSecret] = await invoke<[string, string]>('twitch_load_credentials');
+  setClientId(savedClientId);
+  setClientSecret(savedClientSecret);
 
       const authStatus = await invoke<string>('twitch_get_auth_status');
       
@@ -127,6 +132,8 @@ export default function TwitchIntegration({}: TwitchIntegrationProps) {
       console.error('Failed to check Twitch setup:', error);
       setSetupStatus('error');
       setError(`Setup check failed: ${error}`);
+    } finally {
+      setupCheckInFlight.current = false;
     }
   };
 
@@ -139,7 +146,7 @@ export default function TwitchIntegration({}: TwitchIntegrationProps) {
     try {
       await invoke('twitch_save_credentials', {
         clientId: clientId.trim(),
-        clientSecret: null
+        clientSecret: clientSecret.trim()
       });
       
       setShowCredentialsForm(false);
@@ -168,7 +175,7 @@ export default function TwitchIntegration({}: TwitchIntegrationProps) {
       
       const result = await invoke<string>('twitch_authenticate', {
         clientId,
-        clientSecret: null
+        clientSecret
       });
       
       logger.info('TwitchIntegration', `Authentication initiated: ${result}`);
@@ -281,13 +288,25 @@ export default function TwitchIntegration({}: TwitchIntegrationProps) {
             placeholder="your_client_id_here"
           />
         </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-300 mb-2">
+            Client Secret <span className="text-red-400">*</span>
+          </label>
+          <input
+            type="password"
+            value={clientSecret}
+            onChange={(e) => setClientSecret(e.target.value)}
+            className="w-full px-3 py-2 bg-gray-700/50 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-purple-500"
+            placeholder="your_client_secret_here"
+          />
+        </div>
 
         <div className="flex gap-3">
           <motion.button
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
             onClick={handleSaveCredentials}
-            disabled={!clientId.trim()}
+            disabled={!clientId.trim() || !clientSecret.trim()}
             className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-green-400 disabled:cursor-not-allowed text-white rounded transition-colors"
           >
             Save Credentials

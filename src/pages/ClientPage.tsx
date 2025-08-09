@@ -36,9 +36,18 @@ const ClientPage = () => {
    const [autoConnectEnabled, setAutoConnectEnabled] = useState<boolean>(false);
    const [autoConnectAddress, setAutoConnectAddress] = useState<string>('');
    const [manualOverride, setManualOverride] = useState<boolean>(false);
+   // Auto-reconnect loop state (fixed implementation)
+   const autoConnectAttemptsRef = useRef(0);
+   const [autoConnectAttemptCount, setAutoConnectAttemptCount] = useState(0);
+   const [nextRetryDelayMs, setNextRetryDelayMs] = useState<number | null>(null);
+   const [lastAutoConnectError, setLastAutoConnectError] = useState<string | null>(null);
    const settingsStoreRef = useRef<any>(null);
-   const autoConnectAttemptedRef = useRef(false);
-   const retryIntervalRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+   const autoLoopActiveRef = useRef(false);
+   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+   const attemptTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+   const connectInProgressRef = useRef(false);
+   const stopRequestedRef = useRef(false);
+   const isMountedRef = useRef(true);
 
    const [latestRedemption, setLatestRedemption] = useState<RedemptionData | null>(null);
    const [activeTimers, setActiveTimers] = useState<Record<string, TimerData>>({});
@@ -88,9 +97,10 @@ const ClientPage = () => {
                   updated[timerId].remainingTime -= 1;
                   hasChanges = true;
                } else {
+                  const title = updated[timerId]?.title || 'Unknown';
                   delete updated[timerId];
                   hasChanges = true;
-                  addLog('info', `Timer completed: ${updated[timerId]?.title || 'Unknown'}`);
+                  addLog('info', `Timer completed: ${title}`);
                }
             });
 
@@ -242,7 +252,10 @@ const ClientPage = () => {
    };
 
    useEffect(() => {
+      isMountedRef.current = true;
+      
       const unlistenStatus = listen('STATUS_UPDATE', (event) => {
+         if (!isMountedRef.current) return;
          const message = event.payload as string;
          console.log('Client status:', message);
          addLog('info', message);
@@ -261,6 +274,7 @@ const ClientPage = () => {
       });
 
       const unlistenPairing = listen('PAIRING_REQUIRED', (event) => {
+         if (!isMountedRef.current) return;
          const code = event.payload as string;
          console.log('Pairing code required:', code);
          setPairingCode(code);
@@ -269,6 +283,7 @@ const ClientPage = () => {
       });
 
       const unlistenSuccess = listen('SUCCESS', (event) => {
+         if (!isMountedRef.current) return;
          const message = event.payload as string;
          console.log('Connection success:', message);
          addLog('success', message);
@@ -278,25 +293,65 @@ const ClientPage = () => {
             setIsConnecting(false);
             setPairingCode(null);
             setError(null);
+            connectInProgressRef.current = false;
             persistRecentServer(serverAddress);
+            stopAutoReconnectLoop('connected');
          }
       });
 
       const unlistenClientConnected = listen('CLIENT_CONNECTED', () => {
+         if (!isMountedRef.current) return;
          setConnectionState('connected');
          setIsConnecting(false);
          setPairingCode(null);
+         connectInProgressRef.current = false;
          addLog('success', 'Client connected (event)');
          persistRecentServer(serverAddress);
+         stopAutoReconnectLoop('connected');
       });
+
       const unlistenClientDisconnected = listen('CLIENT_DISCONNECTED', () => {
+         if (!isMountedRef.current) return;
          setConnectionState('disconnected');
          setIsConnecting(false);
          setPairingCode(null);
+         connectInProgressRef.current = false;
          addLog('info', 'Disconnected (event)');
+         // Only start auto-reconnect if conditions are met
+         if (autoConnectEnabled && !manualOverride && !stopRequestedRef.current) {
+            setTimeout(() => {
+               if (isMountedRef.current && autoConnectEnabled && !manualOverride) {
+                  startAutoReconnectLoop();
+               }
+            }, 1000); // Small delay to avoid immediate retry
+         }
+      });
+
+      const unlistenPeerDisconnect = listen('PEER_DISCONNECT', (event) => {
+         if (!isMountedRef.current) return;
+         const reason = event.payload as string;
+         setConnectionState('disconnected');
+         setIsConnecting(false);
+         setPairingCode(null);
+         connectInProgressRef.current = false;
+         addLog('error', `Peer disconnected: ${reason}`);
+         console.log('Peer disconnect event:', reason);
+         
+         // Stop auto-reconnect loop first to avoid conflicts
+         stopAutoReconnectLoop('peer_disconnect');
+         
+         // Start auto-reconnect with a delay if enabled and not manually overridden
+         if (autoConnectEnabled && !manualOverride && !stopRequestedRef.current) {
+            setTimeout(() => {
+               if (isMountedRef.current && autoConnectEnabled && !manualOverride) {
+                  startAutoReconnectLoop();
+               }
+            }, 2000); // Longer delay for peer disconnects
+         }
       });
 
       const unlistenRedemption = listen('REDEMPTION_RECEIVED', async (event) => {
+         if (!isMountedRef.current) return;
          const redemptionData = event.payload as any;
          console.log('Redemption received:', redemptionData);
 
@@ -346,6 +401,7 @@ const ClientPage = () => {
       });
 
       const unlistenError = listen('ERROR', (event) => {
+         if (!isMountedRef.current) return;
          const errorMessage = event.payload as string;
          console.error('P2P error:', errorMessage);
          setError(errorMessage);
@@ -353,9 +409,34 @@ const ClientPage = () => {
          setIsConnecting(false);
          setConnectionState('disconnected');
          setPairingCode(null);
+         connectInProgressRef.current = false;
+         
+         // Only schedule retry if auto-connect is active and we're not manually stopping
+         if (autoConnectEnabled && !manualOverride && autoLoopActiveRef.current && !stopRequestedRef.current) {
+            setLastAutoConnectError(errorMessage);
+            scheduleNextAutoRun();
+         }
       });
 
       return () => {
+         isMountedRef.current = false;
+         stopRequestedRef.current = true;
+         
+         // Clean up timers
+         if (attemptTimeoutRef.current) { 
+            clearTimeout(attemptTimeoutRef.current); 
+            attemptTimeoutRef.current = null; 
+         }
+         if (retryTimerRef.current) { 
+            clearTimeout(retryTimerRef.current); 
+            retryTimerRef.current = null; 
+         }
+         
+         // Stop auto-reconnect
+         autoLoopActiveRef.current = false;
+         connectInProgressRef.current = false;
+         
+         // Clean up audio
          if (audioSrc) {
             URL.revokeObjectURL(audioSrc);
          }
@@ -365,32 +446,57 @@ const ClientPage = () => {
             audioElement.src = '';
          }
          
+         // Clean up event listeners
          unlistenStatus.then(f => f());
          unlistenPairing.then(f => f());
          unlistenSuccess.then(f => f());
          unlistenClientConnected.then(f => f());
          unlistenClientDisconnected.then(f => f());
+         unlistenPeerDisconnect.then(f => f());
          unlistenRedemption.then(f => f());
          unlistenError.then(f => f());
       };
-   }, [audioDeviceId]);
+   }, []); // Remove dependencies to avoid re-creating listeners
 
-   const handleConnect = async () => {
-      if (!serverAddress.trim()) return;
-
+   const handleConnect = async (addrOverride?: string) => {
+      const target = (addrOverride ?? serverAddress).trim();
+      if (!target) {
+         addLog('error', 'No server address provided');
+         return;
+      }
+      
+      // Prevent multiple concurrent connection attempts
+      if (connectInProgressRef.current || isConnecting || connectionState === 'connected') {
+         console.log('Connection already in progress or connected, skipping');
+         return;
+      }
+      
+      if (addrOverride) setServerAddress(target);
       setIsConnecting(true);
       setError(null);
       setConnectionState('connecting');
-      addLog('info', `Attempting to connect to ${serverAddress}`);
+      addLog('info', `Attempting to connect to ${target}`);
+      connectInProgressRef.current = true;
       
       try {
-         await invoke('start_initiator', { address: serverAddress });
+         await invoke('start_initiator', { address: target });
+         // Note: Success will be handled by SUCCESS event listener
       } catch (error) {
+         if (!isMountedRef.current) return; // Component unmounted
+         
          console.error('Failed to start connection:', error);
-         setError(`Failed to connect: ${error}`);
-         addLog('error', `Connection failed: ${error}`);
+         const errMsg = typeof error === 'string' ? error : (error as any)?.toString?.() || 'Unknown error';
+         setError(`Failed to connect: ${errMsg}`);
+         addLog('error', `Connection failed: ${errMsg}`);
          setIsConnecting(false);
          setConnectionState('disconnected');
+         connectInProgressRef.current = false;
+         
+         // Only schedule retry if auto-connect is active and conditions are met
+         if (autoConnectEnabled && !manualOverride && autoLoopActiveRef.current && !stopRequestedRef.current) {
+            setLastAutoConnectError(errMsg);
+            scheduleNextAutoRun();
+         }
       }
    };
 
@@ -408,15 +514,31 @@ const ClientPage = () => {
 
    const handleDisconnect = async () => {
       try {
+         // Stop auto-reconnect first
+         stopAutoReconnectLoop('manual_disconnect');
+         setIsConnecting(false);
+         connectInProgressRef.current = false;
+         
+         // Send graceful notice first (if channel exists) then invoke disconnect
+         try {
+            await invoke('send_disconnect_notice', { reason: 'Client disconnecting' });
+         } catch (_) {
+            // ignore if cannot send (not connected yet)
+         }
+         
          await invoke('disconnect_client');
          setConnectionState('disconnected');
-         setIsConnecting(false);
          setPairingCode(null);
          setError(null);
          addLog('info', 'Disconnected from server');
       } catch (error) {
          console.error('Failed to disconnect:', error);
          addLog('error', `Disconnect failed: ${error}`);
+         // Force state reset even if disconnect fails
+         setConnectionState('disconnected');
+         setIsConnecting(false);
+         connectInProgressRef.current = false;
+         setPairingCode(null);
       }
    };
 
@@ -457,50 +579,154 @@ const ClientPage = () => {
       loadClientSettings();
    }, []);
 
-   useEffect(() => {
-      if (!autoConnectEnabled || manualOverride || connectionState === 'connected') {
-         if (retryIntervalRef.current) {
-            clearTimeout(retryIntervalRef.current as any);
-            retryIntervalRef.current = null;
-         }
+   // === Auto-reconnect loop implementation (fixed) ===
+   const runAutoAttempt = () => {
+      if (!isMountedRef.current || !autoConnectEnabled || manualOverride || connectionState === 'connected' || stopRequestedRef.current) {
+         stopAutoReconnectLoop('conditions_changed');
          return;
       }
-
-      let target = autoConnectAddress.trim();
+      
+      // Prevent multiple concurrent attempts
+      if (connectInProgressRef.current || isConnecting) {
+         console.log('Connection attempt already in progress, skipping auto attempt');
+         scheduleNextAutoRun(); // Reschedule instead of giving up
+         return;
+      }
+      
+      const target = (autoConnectAddress.trim() || recentServers[0] || serverAddress || '').trim();
       if (!target) {
-         target = recentServers[0] || '';
+         stopAutoReconnectLoop('no_target');
+         addLog('error', 'No target address for auto-connect');
+         return;
       }
-      if (!target) return;
-
-      if (!autoConnectAttemptedRef.current) {
-         autoConnectAttemptedRef.current = true;
-         setServerAddress(target);
-         addLog('info', `Auto-connect enabled. Attempting to connect to ${target}`);
-         setIsConnecting(true);
-         handleConnect();
+      
+      autoConnectAttemptsRef.current += 1;
+      setAutoConnectAttemptCount(autoConnectAttemptsRef.current);
+      setLastAutoConnectError(null);
+      setNextRetryDelayMs(null);
+      
+      addLog('info', `Auto-connect attempt #${autoConnectAttemptsRef.current} to ${target}`);
+      handleConnect(target);
+      
+      // Set timeout for this attempt
+      if (attemptTimeoutRef.current) {
+         clearTimeout(attemptTimeoutRef.current);
       }
-
-   retryIntervalRef.current = setTimeout(() => {
-      const cs: any = connectionState;
-      if (!isConnecting && cs !== 'connected' && !manualOverride && autoConnectEnabled) {
-            addLog('info', `Retrying auto-connect to ${target}...`);
-            setServerAddress(target);
-            setIsConnecting(true);
-            handleConnect();
+      
+      attemptTimeoutRef.current = setTimeout(() => {
+         if (!isMountedRef.current) return;
+         
+         // Check if we're still in a connecting state but haven't succeeded
+         if ((isConnecting || connectInProgressRef.current) && connectionState === 'connecting') {
+            console.log('Auto-connect attempt timed out');
+            setIsConnecting(false);
+            connectInProgressRef.current = false;
+            setConnectionState('disconnected');
+            setLastAutoConnectError('Connection timeout');
+            
+            if (autoLoopActiveRef.current && !stopRequestedRef.current) {
+               scheduleNextAutoRun();
+            }
          }
-      }, 5000);
+      }, 15000); // Increased timeout to 15 seconds
+   };
 
-      return () => {
-         if (retryIntervalRef.current) {
-            clearTimeout(retryIntervalRef.current as any);
-            retryIntervalRef.current = null;
+   const scheduleNextAutoRun = () => {
+      if (!isMountedRef.current || !autoLoopActiveRef.current) return;
+      if (!autoConnectEnabled || manualOverride || connectionState === 'connected' || stopRequestedRef.current) {
+         stopAutoReconnectLoop('conditions_changed');
+         return;
+      }
+      
+      if (retryTimerRef.current) {
+         clearTimeout(retryTimerRef.current);
+      }
+      
+      const attempt = autoConnectAttemptsRef.current;
+      const base = 5000; // 5 seconds base delay
+      const maxDelay = 60000; // Maximum 60 seconds
+      const exponentialDelay = Math.min(base * Math.pow(2, Math.max(0, attempt - 1)), maxDelay);
+      const jitter = Math.floor(Math.random() * 1000); // 0-1 second jitter
+      const finalDelay = exponentialDelay + jitter;
+      
+      setNextRetryDelayMs(finalDelay);
+      addLog('info', `Next auto-connect attempt #${attempt + 1} in ${(finalDelay/1000).toFixed(1)}s`);
+      
+      retryTimerRef.current = setTimeout(() => {
+         if (isMountedRef.current && autoLoopActiveRef.current) {
+            runAutoAttempt();
          }
-      };
-   }, [autoConnectEnabled, autoConnectAddress, recentServers, connectionState, isConnecting, manualOverride]);
+      }, finalDelay);
+   };
+
+   const startAutoReconnectLoop = () => {
+      if (!isMountedRef.current || autoLoopActiveRef.current || !autoConnectEnabled || manualOverride || connectionState === 'connected') {
+         console.log('Skipping auto-reconnect start - conditions not met');
+         return;
+      }
+      
+      stopRequestedRef.current = false;
+      autoLoopActiveRef.current = true;
+      autoConnectAttemptsRef.current = 0;
+      setAutoConnectAttemptCount(0);
+      setLastAutoConnectError(null);
+      setNextRetryDelayMs(null);
+      
+      addLog('info', 'Auto-reconnect loop started');
+      
+      // Small delay before first attempt to avoid immediate retry on disconnect
+      setTimeout(() => {
+         if (isMountedRef.current && autoLoopActiveRef.current) {
+            runAutoAttempt();
+         }
+      }, 2000);
+   };
+
+   const stopAutoReconnectLoop = (reason?: string) => {
+      if (!autoLoopActiveRef.current) return;
+      
+      autoLoopActiveRef.current = false;
+      stopRequestedRef.current = true;
+      
+      if (retryTimerRef.current) { 
+         clearTimeout(retryTimerRef.current); 
+         retryTimerRef.current = null; 
+      }
+      if (attemptTimeoutRef.current) { 
+         clearTimeout(attemptTimeoutRef.current); 
+         attemptTimeoutRef.current = null; 
+      }
+      
+      setNextRetryDelayMs(null);
+      
+      if (reason) {
+         addLog('info', `Auto-reconnect stopped (${reason})`);
+      }
+   };
+
+   // Separate useEffect for auto-reconnect control to avoid dependency issues
+   useEffect(() => {
+      if (autoConnectEnabled && !manualOverride && connectionState === 'disconnected' && !stopRequestedRef.current) {
+         // Small delay to avoid immediate start during component initialization
+         const timer = setTimeout(() => {
+            if (isMountedRef.current && autoConnectEnabled && !manualOverride && connectionState === 'disconnected') {
+               startAutoReconnectLoop();
+            }
+         }, 1000);
+         return () => clearTimeout(timer);
+      } else if (!autoConnectEnabled || manualOverride || connectionState === 'connected') {
+         stopAutoReconnectLoop('settings_changed');
+      }
+   }, [autoConnectEnabled, manualOverride, connectionState]);
 
    const handleToggleAutoConnect = async () => {
       const next = !autoConnectEnabled;
       setAutoConnectEnabled(next);
+      if (!next) {
+         stopAutoReconnectLoop('user_toggle_off');
+      } else {
+         startAutoReconnectLoop();
+      }
       try {
          if (!settingsStoreRef.current) {
             const { load } = await import('@tauri-apps/plugin-store');
@@ -515,10 +741,10 @@ const ClientPage = () => {
    const handleManualOverride = () => {
       setManualOverride(true);
       setIsConnecting(false);
-      if (retryIntervalRef.current) {
-         clearTimeout(retryIntervalRef.current as any);
-         retryIntervalRef.current = null;
-      }
+      connectInProgressRef.current = false;
+      stopAutoReconnectLoop('manual_override');
+      setNextRetryDelayMs(null);
+      setLastAutoConnectError(null);
       addLog('info', 'Manual override activated. You can enter a different IP.');
    };
 
@@ -640,7 +866,7 @@ const ClientPage = () => {
                         <motion.button
                            whileHover={{ scale: 1.02 }}
                            whileTap={{ scale: 0.98 }}
-                           onClick={handleConnect}
+                           onClick={() => handleConnect()}
                            disabled={isConnecting || !serverAddress.trim()}
                            className="w-full bg-blue-500 hover:bg-blue-600 text-white font-medium py-3 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                         >
@@ -663,11 +889,31 @@ const ClientPage = () => {
                {connectionState === 'disconnected' && autoConnectEnabled && !manualOverride && (
                   <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="bg-gray-800/40 border border-gray-700/40 rounded-xl p-8 text-center">
                      <h2 className="text-xl font-bold text-white mb-4">Auto-Connect Enabled</h2>
-                     <p className="text-gray-300 mb-4">Trying to connect to {autoConnectAddress || recentServers[0] || 'configured server'}...</p>
+                     <p className="text-gray-300 mb-2">Trying to connect to {autoConnectAddress || recentServers[0] || 'configured server'}...</p>
+                     <div className="text-xs text-gray-400 mb-4 space-y-1">
+                        <p>Attempt: {autoConnectAttemptCount || 1}</p>
+                        {nextRetryDelayMs !== null && (
+                           <p>Next retry in {(nextRetryDelayMs/1000).toFixed(0)}s</p>
+                        )}
+                        {lastAutoConnectError && (
+                           <p className="text-red-400 truncate max-w-full" title={lastAutoConnectError}>Last error: {lastAutoConnectError}</p>
+                        )}
+                     </div>
                      <div className="flex items-center justify-center mb-6">
                         <div className="w-6 h-6 border-4 border-blue-500/30 border-t-blue-400 rounded-full animate-spin" />
                      </div>
                      <button onClick={handleManualOverride} className="px-4 py-2 rounded-lg bg-gray-700/60 hover:bg-gray-700 text-gray-200 text-sm border border-gray-600/60">Enter a different IP...</button>
+                     <div className="mt-4 flex justify-center gap-4 text-xs">
+                        <button
+                           onClick={() => { autoConnectAttemptsRef.current = 0; setAutoConnectAttemptCount(0); setLastAutoConnectError(null); addLog('info','Attempts counter reset'); }}
+                           className="text-blue-400 hover:text-blue-300 underline"
+                        >Reset Attempts</button>
+                        {!autoLoopActiveRef.current ? (
+                           <button onClick={() => startAutoReconnectLoop()} className="text-blue-400 hover:text-blue-300 underline">Start Loop</button>
+                        ) : (
+                           <button onClick={() => stopAutoReconnectLoop('manual_pause')} className="text-blue-400 hover:text-blue-300 underline">Pause Loop</button>
+                        )}
+                     </div>
                   </motion.div>
                )}
 
@@ -676,7 +922,7 @@ const ClientPage = () => {
                      <div className="flex items-center justify-between mb-4">
                         <h2 className="text-xl font-bold text-white">Manual Connect (Override)</h2>
                         <button
-                           onClick={() => { setManualOverride(false); autoConnectAttemptedRef.current = false; }}
+                           onClick={() => { setManualOverride(false); startAutoReconnectLoop(); }}
                            className="text-xs text-blue-400 hover:text-blue-300 underline"
                         >Return to auto-connect</button>
                      </div>
@@ -692,7 +938,7 @@ const ClientPage = () => {
                         <motion.button
                            whileHover={{ scale: 1.02 }}
                            whileTap={{ scale: 0.98 }}
-                           onClick={handleConnect}
+                           onClick={() => handleConnect()}
                            disabled={isConnecting || !serverAddress.trim()}
                            className="w-full bg-blue-500 hover:bg-blue-600 text-white font-medium py-3 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                         >

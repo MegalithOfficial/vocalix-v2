@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { load } from '@tauri-apps/plugin-store';
 import { AudioQuality } from '../utils/audioSettings';
@@ -56,19 +56,24 @@ export const useSettingsState = (activeTab?: string) => {
   const [manualConfirm, setManualConfirm] = useState(true);
   const [p2pPort, setP2pPort] = useState(12345);
   const [onlyClientMode, setOnlyClientMode] = useState(false);
-  // Auto-connect shared settings
+
   const [autoConnectEnabled, setAutoConnectEnabled] = useState(false);
   const [autoConnectAddress, setAutoConnectAddress] = useState('');
 
+  // Prevent overlapping Twitch auth status checks
+  const twitchAuthCheckInFlight = useRef(false);
+
   const checkTwitchAuthStatus = async () => {
+    if (twitchAuthCheckInFlight.current) return;
+    twitchAuthCheckInFlight.current = true;
     try {
       const status = await invoke('twitch_get_auth_status') as string;
       if (activeTab === 'twitch') {
         console.log('SettingsPage: Received auth status:', status);
       }
-      if (status === 'no_credentials') {
+  if (status === 'no_credentials' || status === 'invalid' || status === 'not_authenticated') {
         setTwitchAuthStatus('needs_credentials');
-      } else if (status === 'valid') {
+  } else if (status === 'valid' || status === 'expiring_soon') {
         setTwitchAuthStatus('ready');
       } else {
         setTwitchAuthStatus('checking');
@@ -76,6 +81,8 @@ export const useSettingsState = (activeTab?: string) => {
     } catch (error) {
       console.error('Error checking Twitch auth status:', error);
       setTwitchAuthStatus('needs_credentials');
+    } finally {
+      twitchAuthCheckInFlight.current = false;
     }
   };
 

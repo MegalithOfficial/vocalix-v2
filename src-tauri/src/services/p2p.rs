@@ -55,6 +55,8 @@ pub async fn handle_connection(
 
     let mut buffer = vec![0; 8192];
     let mut line_buffer = Vec::new();
+    let mut last_activity = std::time::Instant::now();
+    let connection_timeout = std::time::Duration::from_secs(30); // 30 second timeout
 
     loop {
         tokio::select! {
@@ -62,13 +64,24 @@ pub async fn handle_connection(
             result = stream.read(&mut buffer) => {
                 let n = match result {
                     Ok(0) => {
-                        let _ = window.emit("STATUS_UPDATE", "Connection closed.");
+                        log_and_emit(&window, role, "CONNECTION_CLOSED", "Peer closed connection gracefully").await;
+                        window.emit("STATUS_UPDATE", "Peer disconnected").ok();
+                        window.emit("PEER_DISCONNECT", "Connection closed by peer").ok();
                         clear_shared_connection_state(&window).await;
                         break;
                     },
-                    Ok(n) => n,
+                    Ok(n) => {
+                        last_activity = std::time::Instant::now(); // Update activity timestamp
+                        n
+                    },
                     Err(e) => {
-                        let _ = window.emit("ERROR", format!("Read error: {}", e));
+                        log_and_emit(&window, role, "CONNECTION_ERROR", &format!("Network read error: {}", e)).await;
+                        window.emit("ERROR", format!("Connection error: {}", e)).ok();
+                        window.emit("PEER_DISCONNECT", format!("Connection lost: {}", e)).ok();
+                        
+                        // Try to send disconnect notice if possible
+                        let _ = send_disconnect(&mut stream, &session_keys, &format!("Connection error: {}", e)).await;
+                        
                         clear_shared_connection_state(&window).await;
                         break;
                     }
@@ -194,7 +207,13 @@ pub async fn handle_connection(
                         },
                         (ConnectionState::WaitingForPeerConfirmation, Message::PairingConfirmed) => {
                             log_and_emit(&window, role, "PEER_CONFIRMED", "Peer has confirmed pairing, ready for session keys").await;
-                            window.emit("STATUS_UPDATE", "Both peers confirmed. Ready for session keys...").unwrap();
+                            window.emit("STATUS_UPDATE", "Both peers confirmed. Starting session setup...").unwrap();
+                            // Now that both sides confirmed, start the session key exchange
+                            let (session_priv, session_pub) = crate::services::pairing::perform_dh_exchange();
+                            temp_dh_private_key = Some(session_priv);
+                            let msg = Message::SessionKeyRequest(session_pub.to_sec1_bytes().into_vec());
+                            log_and_emit(&window, role, "INITIATING_SESSION_KEYS", "Starting session key exchange after mutual confirmation").await;
+                            send_message(&mut stream, &msg).await;
                             connection_state = ConnectionState::Authenticating;
                         },
                         // === SESSION KEY ESTABLISHMENT ===
@@ -256,8 +275,8 @@ pub async fn handle_connection(
                                 match decrypt_message(keys, ciphertext, nonce).await {
                                     Ok(plaintext) => {
                                         log_and_emit(&window, role, "MESSAGE_DECRYPTED", &format!("Plaintext: {}", plaintext)).await;
-                                        if let Ok(redemption_msg) = serde_json::from_str::<Message>(&plaintext) {
-                                            match redemption_msg {
+                                        if let Ok(protocol_msg) = serde_json::from_str::<Message>(&plaintext) {
+                                            match protocol_msg {
                                                 Message::RedemptionMessage { audio, title, content, message_type, time } => {
                                                     let protocol_type = match message_type { 1 => "redemption-with-timer", _ => "redemption-without-timer" };
                                                     log_and_emit(&window, role, "REDEMPTION_DECRYPTED", &format!("Type: {}, Title: {}, Audio: {} bytes", protocol_type, title, audio.len())).await;
@@ -269,6 +288,19 @@ pub async fn handle_connection(
                                                         "time": time
                                                     });
                                                     window.emit("REDEMPTION_RECEIVED", redemption_data).unwrap();
+                                                },
+                                                Message::Disconnect { reason } => {
+                                                    log_and_emit(&window, role, "PEER_DISCONNECT", &format!("Peer sent graceful disconnect: {}", reason)).await;
+                                                    window.emit("STATUS_UPDATE", format!("Peer disconnecting: {}", reason)).ok();
+                                                    window.emit("PEER_DISCONNECT", format!("Peer disconnected: {}", reason)).ok();
+                                                    
+                                                    // Send acknowledgment back to confirm we received the disconnect
+                                                    let ack_reason = format!("Disconnect acknowledged: {}", reason);
+                                                    let _ = send_disconnect(&mut stream, &session_keys, &ack_reason).await;
+                                                    
+                                                    clear_shared_connection_state(&window).await;
+                                                    // Exit handler – terminate loop & close socket
+                                                    return;
                                                 },
                                                 _ => { window.emit("MESSAGE_RECEIVED", plaintext).unwrap(); }
                                             }
@@ -386,8 +418,26 @@ pub async fn handle_connection(
                     }
                 }
             }
+            // Connection timeout check
+            _ = tokio::time::sleep(connection_timeout) => {
+                if last_activity.elapsed() > connection_timeout {
+                    log_and_emit(&window, role, "CONNECTION_TIMEOUT", "Connection timed out due to inactivity").await;
+                    window.emit("ERROR", "Connection timed out").ok();
+                    window.emit("PEER_DISCONNECT", "Connection timeout").ok();
+                    
+                    // Try to send disconnect notice
+                    let _ = send_disconnect(&mut stream, &session_keys, "Connection timeout").await;
+                    
+                    clear_shared_connection_state(&window).await;
+                    break;
+                }
+            }
         } // end select
     } // end loop
+    
+    // Cleanup connection state when loop exits
+    log_and_emit(&window, role, "CONNECTION_ENDED", "Connection loop ended, cleaning up").await;
+    clear_shared_connection_state(&window).await;
 } // end handle_connection
 
 async fn encrypt_message(
@@ -464,6 +514,23 @@ async fn send_encrypted_message(
     }
 }
 
+pub async fn send_disconnect(stream: &mut TcpStream, keys: &Option<SessionKeys>, reason: &str) {
+    // Serialize a Disconnect message and encrypt inside EncryptedMessage for graceful shutdown
+    if let Some(session_keys) = keys {
+        if let Ok(serialized) = serde_json::to_string(&Message::Disconnect { reason: reason.to_string() }) {
+            match encrypt_message(session_keys, &serialized).await {
+                Ok((ciphertext, nonce)) => {
+                    let msg = Message::EncryptedMessage { ciphertext, nonce };
+                    send_message(stream, &msg).await;
+                },
+                Err(e) => {
+                    eprintln!("[DISCONNECT] Failed to encrypt disconnect message: {}", e);
+                }
+            }
+        }
+    }
+}
+
 async fn send_redemption_message(
     stream: &mut TcpStream,
     session_keys: &Option<SessionKeys>,
@@ -509,6 +576,7 @@ async fn update_shared_connection_state(window: &Window, new_state: Option<Conne
     }
     if matches!(new_state, Some(ConnectionState::Encrypted)) {
         let _ = window.emit("CLIENT_CONNECTED", "");
+        let _ = window.emit("SUCCESS", "Client connection established");
     }
 }
 
@@ -525,4 +593,5 @@ async fn clear_shared_connection_state(window: &Window) {
         }
     }
     let _ = window.emit("CLIENT_DISCONNECTED", "");
+    let _ = window.emit("STATUS_UPDATE", "Connection closed");
 }

@@ -10,7 +10,7 @@ use tauri::{Emitter, State, Window};
 #[tauri::command]
 pub async fn twitch_authenticate(
     client_id: String,
-    client_secret: Option<String>,
+    client_secret: String,
     window: Window,
     twitch_state: State<'_, TwitchState>,
 ) -> Result<String, String> {
@@ -278,14 +278,14 @@ pub async fn twitch_is_authenticated(twitch_state: State<'_, TwitchState>) -> Re
 #[tauri::command]
 pub async fn twitch_save_credentials(
     client_id: String,
-    client_secret: Option<String>,
+    client_secret: String,
 ) -> Result<(), String> {
-    TwitchAuthManager::save_client_credentials(&client_id, client_secret.as_deref())
+    TwitchAuthManager::save_client_credentials(&client_id, &client_secret)
         .map_err(|e| format!("Failed to save credentials: {}", e))
 }
 
 #[tauri::command]
-pub async fn twitch_load_credentials() -> Result<(String, Option<String>), String> {
+pub async fn twitch_load_credentials() -> Result<(String, String), String> {
     TwitchAuthManager::load_client_credentials()
         .map_err(|e| format!("Failed to load credentials: {}", e))
 }
@@ -314,18 +314,22 @@ pub async fn twitch_get_auth_status(
         Err(_) => return Ok("no_credentials".to_string()),
     };
 
-    match auth_manager.get_auth_status().await {
-        Ok(status) => match status {
-            crate::services::twitch_oauth::AuthStatus::NotAuthenticated => {
-                Ok("not_authenticated".to_string())
+    let initial = auth_manager
+        .get_auth_status()
+        .await
+        .map_err(|e| format!("Failed to get auth status: {}", e))?;
+
+    use crate::services::twitch_oauth::AuthStatus;
+
+    match initial {
+        AuthStatus::Valid => Ok("valid".to_string()),
+        AuthStatus::NotAuthenticated => Ok("not_authenticated".to_string()),
+        AuthStatus::ExpiringSoon(_) | AuthStatus::Invalid => {
+            match auth_manager.validate_current_tokens().await {
+                Ok(_validation) => Ok("valid".to_string()),
+                Err(_) => Ok("invalid".to_string()),
             }
-            crate::services::twitch_oauth::AuthStatus::Invalid => Ok("invalid".to_string()),
-            crate::services::twitch_oauth::AuthStatus::Valid => Ok("valid".to_string()),
-            crate::services::twitch_oauth::AuthStatus::ExpiringSoon(_) => {
-                Ok("expiring_soon".to_string())
-            }
-        },
-        Err(e) => Err(format!("Failed to get auth status: {}", e)),
+        }
     }
 }
 

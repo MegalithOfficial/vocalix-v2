@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Wifi, CheckCircle, AlertCircle, Loader2, ArrowLeft, Twitch } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
@@ -18,11 +18,14 @@ const ConnectingEventSub = () => {
     { id: 'ready', label: 'Ready to receive redemptions', icon: CheckCircle }
   ];
 
+  const listenersRef = useRef<Array<Promise<() => void>>>([]);
+  const abortingRef = useRef(false);
+
   useEffect(() => {
     let mounted = true;
-    let unlistenStatus: Promise<() => void>;
-    let unlistenError: Promise<() => void>;
-    let unlistenEventSubConnected: Promise<() => void>;
+    let unlistenStatus: Promise<() => void> | undefined;
+    let unlistenError: Promise<() => void> | undefined;
+    let unlistenEventSubConnected: Promise<() => void> | undefined;
 
     const handleError = async (errorMessage: string) => {
       console.error('EventSub error occurred, disconnecting...', errorMessage);
@@ -77,6 +80,8 @@ const ConnectingEventSub = () => {
       logger.info('ConnectingEventSub', `Status update: ${event.payload}`);
       const payload = event.payload as string;
       
+      if (abortingRef.current) return; // ignore after abort
+
       if (payload.includes('Connection state changed: Connected') || 
           payload.includes('WebSocket session established') ||
           payload.includes('EventSub connected') || 
@@ -96,11 +101,13 @@ const ConnectingEventSub = () => {
       const errorMessage = event.payload as string;
       console.log('ERROR event received:', errorMessage);
       logger.error('ConnectingEventSub', `ERROR event received: ${errorMessage}`);
+      if (abortingRef.current) return;
       await handleError(errorMessage);
     });
 
     unlistenEventSubConnected = listen('EVENTSUB_CONNECTED', () => {
       logger.info('ConnectingEventSub', 'EventSub connection established');
+      if (abortingRef.current) return;
       if (mounted) {
         setCurrentStep(2);
         setTimeout(() => {
@@ -111,21 +118,35 @@ const ConnectingEventSub = () => {
       }
     });
 
-    initializeEventSub();
+  initializeEventSub();
+
+  // Track listeners for manual early cleanup
+  listenersRef.current = [unlistenStatus, unlistenError, unlistenEventSubConnected].filter(Boolean) as Promise<() => void>[];
 
     return () => {
       mounted = false;
-      if (unlistenStatus) unlistenStatus.then(f => f());
-      if (unlistenError) unlistenError.then(f => f());
-      if (unlistenEventSubConnected) unlistenEventSubConnected.then(f => f());
+      listenersRef.current.forEach(p => p.then(f => f()).catch(() => {}));
+      listenersRef.current = [];
     };
   }, [navigate]);
 
+  const cleanupListenersEarly = () => {
+    listenersRef.current.forEach(p => p.then(f => f()).catch(() => {}));
+    listenersRef.current = [];
+  };
+
   const handleGoBack = async () => {
+    if (abortingRef.current) return; // prevent double
+    abortingRef.current = true;
+    setError(null);
+    logger.info('ConnectingEventSub', 'User requested cancel/back; aborting EventSub setup');
+    cleanupListenersEarly();
     try {
       await invoke('twitch_stop_event_listener');
+      logger.info('ConnectingEventSub', 'EventSub listener stopped on user cancel');
     } catch (error) {
       console.error('Failed to stop event listener:', error);
+      logger.error('ConnectingEventSub', `Failed stopping listener on cancel: ${error}`);
     }
     navigate('/');
   };

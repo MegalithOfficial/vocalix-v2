@@ -70,7 +70,7 @@ const HomePage = () => {
       setValidationStep('Verifying credentials...');
       await new Promise(resolve => setTimeout(resolve, 500));
       
-      const credentials = await invoke('twitch_load_credentials') as [string, string | null];
+  const credentials = await invoke('twitch_load_credentials') as [string, string];
       const [clientId] = credentials;
       
       if (!clientId) {
