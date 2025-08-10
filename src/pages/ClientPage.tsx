@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion';
 import { useState, useEffect, useRef } from 'react';
-import { ArrowLeft, Wifi, WifiOff, Pause, Clock, User, MessageSquare, AlertCircle, RefreshCw, ChevronDown, ChevronUp, List } from 'lucide-react';
+import { ArrowLeft, Wifi, WifiOff, Pause, Clock, MessageSquare, AlertCircle, RefreshCw, ChevronDown, ChevronUp, List } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
