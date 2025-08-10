@@ -126,6 +126,7 @@ fn main() {
             commands::python::get_available_devices,
             commands::python::force_reinstall_libraries,
             commands::python::reset_python_environment,
+            commands::python::delete_python_environment,
             commands::python::install_dependencies,
             commands::python::download_models,
             commands::python::validate_server_requirements,

@@ -101,7 +101,6 @@ pub async fn setup_python_environment(
     window: Window,
 ) -> Result<serde_json::Value, String> {
     use std::fs;
-    // Command execution now uses hidden commands
 
     log_info!(
         "PythonEnvironment",
@@ -157,9 +156,9 @@ pub async fn setup_python_environment(
         let major: i32 = version_parts[0].parse().unwrap_or(0);
         let minor: i32 = version_parts[1].parse().unwrap_or(0);
 
-        if major < 3 || (major == 3 && minor < 10) {
+        if major != 3 || minor != 10 {
             return Err(format!(
-                "Python version {}.{} found, but version 3.10 or higher is required.",
+                "Python version {}.{} found, but only Python 3.10.* is supported. Please install Python 3.10.",
                 major, minor
             ));
         }
@@ -341,7 +340,6 @@ pub async fn setup_python_environment(
 
 #[tauri::command]
 pub async fn check_environment_status(app: AppHandle) -> Result<serde_json::Value, String> {
-    // Command execution now uses hidden commands
 
     log_info!("PythonEnvironment", "Checking environment status...");
 
@@ -825,6 +823,51 @@ pub async fn force_reinstall_libraries(
     );
 
     Ok("Libraries force-reinstalled successfully".to_string())
+}
+
+#[tauri::command]
+pub async fn delete_python_environment(
+    app: AppHandle,
+    window: tauri::Window,
+) -> Result<String, String> {
+    use std::fs;
+    
+
+    log_info!("PythonEnvironment", "Deleting Python environment...");
+
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data directory: {}", e))?;
+
+    let pythonenv_path = app_data_dir.join("pythonenv");
+
+    let _ = window.emit(
+        "PYTHON_SETUP_PROGRESS",
+        serde_json::json!({
+            "progress": 20,
+            "status": "Removing virtual environment..."
+        }),
+    );
+
+    if pythonenv_path.exists() {
+        if let Err(e) = fs::remove_dir_all(&pythonenv_path) {
+            return Err(format!("Failed to remove existing environment: {}", e));
+        }
+        log_info!("PythonEnvironment", "Python environment deleted successfully");
+    } else {
+        log_info!("PythonEnvironment", "Python environment directory does not exist");
+    }
+
+    let _ = window.emit(
+        "PYTHON_SETUP_PROGRESS",
+        serde_json::json!({
+            "progress": 100,
+            "status": "Environment deleted successfully!"
+        }),
+    );
+
+    Ok("Python environment deleted successfully".to_string())
 }
 
 #[tauri::command]

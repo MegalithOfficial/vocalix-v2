@@ -53,17 +53,15 @@ const SecuritySettingsTab = ({ settingsState }: SecuritySettingsTabProps) => {
         setIsSaving(false);
       }
     };
-    const timeoutId = setTimeout(saveCurrentSettings, 800); // debounce
+    const timeoutId = setTimeout(saveCurrentSettings, 800); 
     return () => clearTimeout(timeoutId);
   }, [p2pPort, autoAccept, manualConfirm, autoConnectEnabled, autoConnectAddress, saveSecuritySettings]);
-  // Validate auto-connect address when it changes
   useEffect(() => {
     if (!autoConnectEnabled || !autoConnectAddress.trim()) {
       setAutoConnectAddressError(null);
       return;
     }
     const raw = autoConnectAddress.trim();
-    // Accept either IPv4:port or hostname:port (hostname labels letters/digits/hyphen)
     const hostPortPattern = /^((([a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+)|(\d{1,3}(?:\.\d{1,3}){3})):(\d{1,5})$/;
     const m = raw.match(hostPortPattern);
     if (!m) {
@@ -76,7 +74,6 @@ const SecuritySettingsTab = ({ settingsState }: SecuritySettingsTabProps) => {
       setAutoConnectAddressError('Port out of range');
       return;
     }
-    // If IP, validate octets
     const ipMatch = raw.match(/^(\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})$/);
     if (ipMatch) {
       const ipPart = ipMatch[1];
@@ -143,7 +140,6 @@ const SecuritySettingsTab = ({ settingsState }: SecuritySettingsTabProps) => {
             <h2 className="text-2xl font-bold text-white mb-1">Security & Privacy</h2>
             <p className="text-gray-400">Configure connection security and privacy settings</p>
           </div>
-          {/* Save indicator */}
           {isSaving && (
             <div className="flex items-center space-x-2 text-sm">
               <div className="w-2 h-2 bg-blue-400 rounded-full animate-pulse" />
@@ -218,10 +214,8 @@ const SecuritySettingsTab = ({ settingsState }: SecuritySettingsTabProps) => {
             )}
           </div>
 
-          {/* Divider keeps rhythm even if section below is hidden */}
           <div className="border-t border-gray-700/50" />
 
-          {/* Auto-connect to Last Server (visible both modes) */}
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-2">Auto-Connect to Last / Specific Server</label>
             <div className="flex items-center justify-between mb-3">
@@ -253,7 +247,7 @@ const SecuritySettingsTab = ({ settingsState }: SecuritySettingsTabProps) => {
             )}
           </div>
 
-          {/* Connection Security (hidden in client-only mode) */}
+          {/* Connection Security */}
           {!onlyClientMode && (
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-3">Connection Security</label>

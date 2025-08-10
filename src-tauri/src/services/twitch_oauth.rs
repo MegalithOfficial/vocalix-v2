@@ -451,6 +451,7 @@ impl TwitchSecureStore {
     pub fn delete_tokens() -> Result<()> { Self::delete(Self::TOKENS_KEY) }
     pub fn tokens_exist() -> bool { Self::exists(Self::TOKENS_KEY) }
 
+
     // Credentials API
     pub fn save_credentials(client_id: &str, client_secret: &str) -> Result<()> {
         let payload = serde_json::json!({
@@ -540,7 +541,6 @@ impl TwitchAuthManager {
         let mut tokens = TwitchSecureStore::load_tokens()
             .map_err(|_| anyhow!("No saved tokens found. Please authenticate first."))?;
 
-    // Only refresh when expiry is imminent (< 60s) to avoid refreshing on every API call
     let expires_soon = tokens.expires_at < (Utc::now() + chrono::Duration::seconds(60));
 
         if expires_soon {

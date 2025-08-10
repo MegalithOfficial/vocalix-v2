@@ -5159,14 +5159,16 @@ name = "vocalix-v2"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "base64 0.21.7",
+ "base64 0.22.1",
  "chrono",
  "dirs 5.0.1",
  "futures-util",
  "hex",
+ "hkdf",
  "hmac",
  "keyring",
  "local-ip-address",
+ "once_cell",
  "p256",
  "rand 0.8.5",
  "rand_core 0.6.4",

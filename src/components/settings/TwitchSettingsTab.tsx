@@ -25,7 +25,6 @@ const TwitchSettingsTab = ({ settingsState }: TwitchSettingsTabProps) => {
     loadRedemptions,
     updateRedemptionConfig,
     saveAudioFile,
-    //checkTwitchAuthStatus,
   } = settingsState;
 
   const handleFileUpload = async (redemptionId: string, files: FileList | null) => {
@@ -146,7 +145,7 @@ const TwitchSettingsTab = ({ settingsState }: TwitchSettingsTabProps) => {
 
       <TwitchIntegration />
 
-      {/* Redemptions Manager - Only show if Twitch is properly configured */}
+      {/* Redemptions Manager */}
       {twitchAuthStatus === 'ready' && (
         <div className="space-y-6">
           <div className="flex items-center justify-between mb-6">

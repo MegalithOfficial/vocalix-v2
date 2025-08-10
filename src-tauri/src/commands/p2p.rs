@@ -209,7 +209,6 @@ pub async fn stop_listener(
     
     let message_tx = state.message_tx.lock().await;
     if let Some(tx) = message_tx.as_ref() {
-        // Send proper disconnect message instead of plaintext
         let disconnect_msg = Message::Disconnect { reason: "Server shutting down".to_string() };
         let serialized = serde_json::to_string(&disconnect_msg)
             .map_err(|e| format!("Failed to serialize disconnect message: {}", e))?;
@@ -217,7 +216,6 @@ pub async fn stop_listener(
         match tx.send(serialized) {
             Ok(_) => {
                 window.emit("STATUS_UPDATE", "Disconnect message sent to client").ok();
-                // Give time for the message to be sent
                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
             },
             Err(e) => {
@@ -227,7 +225,6 @@ pub async fn stop_listener(
         }
     }
     drop(message_tx);
-    // Clear connection state & message channel
     {
         let mut conn = state.connection_state.lock().await;
         *conn = None;
@@ -237,7 +234,6 @@ pub async fn stop_listener(
         *tx = None;
     }
     
-    // Emit comprehensive disconnect events
     window.emit("PEER_DISCONNECT", "Server stopped").ok();
     window.emit("STATUS_UPDATE", "Server stopped").unwrap();
     window.emit("SERVER_STOPPED", ()).unwrap();
@@ -250,10 +246,8 @@ pub async fn disconnect_client(
     window: Window,
     state: State<'_, AppStateWithChannel>,
 ) -> Result<(), String> {
-    // Explicit client-side disconnect (initiator) or server telling itself to teardown connection without shutting listener
     window.emit("STATUS_UPDATE", "Disconnecting client session...").ok();
     
-    // Try to send a graceful Disconnect if channel exists
     let maybe_tx = {
         let tx_guard = state.message_tx.lock().await;
         tx_guard.clone()
@@ -264,7 +258,6 @@ pub async fn disconnect_client(
             match tx.send(serialized) {
                 Ok(_) => {
                     window.emit("STATUS_UPDATE", "Disconnect message sent to peer").ok();
-                    // Give a moment for the message to be sent
                     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                 },
                 Err(e) => {
@@ -274,7 +267,6 @@ pub async fn disconnect_client(
         }
     }
     
-    // Clear channel & state
     {
         let mut tx = state.message_tx.lock().await;
         *tx = None;
@@ -284,7 +276,6 @@ pub async fn disconnect_client(
         *cs = None;
     }
     
-    // Emit comprehensive disconnect events
     window.emit("CLIENT_DISCONNECTED", "").ok();
     window.emit("PEER_DISCONNECT", "Local disconnect initiated").ok();
     window.emit("STATUS_UPDATE", "Client session disconnected").ok();

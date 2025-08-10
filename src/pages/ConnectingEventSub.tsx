@@ -80,7 +80,7 @@ const ConnectingEventSub = () => {
       logger.info('ConnectingEventSub', `Status update: ${event.payload}`);
       const payload = event.payload as string;
       
-      if (abortingRef.current) return; // ignore after abort
+      if (abortingRef.current) return; 
 
       if (payload.includes('Connection state changed: Connected') || 
           payload.includes('WebSocket session established') ||
@@ -120,7 +120,6 @@ const ConnectingEventSub = () => {
 
   initializeEventSub();
 
-  // Track listeners for manual early cleanup
   listenersRef.current = [unlistenStatus, unlistenError, unlistenEventSubConnected].filter(Boolean) as Promise<() => void>[];
 
     return () => {
@@ -136,7 +135,7 @@ const ConnectingEventSub = () => {
   };
 
   const handleGoBack = async () => {
-    if (abortingRef.current) return; // prevent double
+    if (abortingRef.current) return; 
     abortingRef.current = true;
     setError(null);
     logger.info('ConnectingEventSub', 'User requested cancel/back; aborting EventSub setup');

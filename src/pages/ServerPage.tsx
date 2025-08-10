@@ -138,7 +138,7 @@ const ServerPage = () => {
         getNetworkInfo();
       } else if (message.includes('Connection closed')) {
         setIsClientConnected(false);
-        setPairingCode(null); // Clear pairing code on connection close
+        setPairingCode(null);
         addServerLog('info', 'Client disconnected');
       } else if (message.includes('Peer confirmed pairing') || message.includes('Both peers confirmed')) {
         addServerLog('success', 'Pairing successful - establishing secure connection...');
@@ -202,28 +202,25 @@ const ServerPage = () => {
       console.log('Success event:', message);
       addServerLog('success', message);
       
-      // Check if this is about the encrypted channel being established
       if (message.includes('Secure encrypted channel established')) {
         setIsClientConnected(true);
-        setPairingCode(null); // Clear pairing code when successfully connected
+        setPairingCode(null);
         addServerLog('success', 'Client connected and encrypted channel established!');
       }
     });
 
-    // New: explicit client connection events
     const unlistenClientConnected = listen('CLIENT_CONNECTED', () => {
       if (!mounted) return;
       setIsClientConnected(true);
-      setPairingCode(null); // Clear pairing code when successfully connected
+      setPairingCode(null); 
       addServerLog('success', 'Client connected (event)');
     });
 
     const unlistenClientDisconnected = listen('CLIENT_DISCONNECTED', () => {
       if (!mounted) return;
       setIsClientConnected(false);
-      setPairingCode(null); // Clear pairing code on disconnect
+      setPairingCode(null);
       addServerLog('info', 'Client disconnected (event)');
-      // Server should still be running, just no client connected
     });
 
     const unlistenPeerDisconnect = listen('PEER_DISCONNECT', (event) => {
@@ -310,7 +307,7 @@ const ServerPage = () => {
     try {
       setError(null);
       console.log('Starting server...');
-      setIsServerRunning(true); // Set state immediately
+      setIsServerRunning(true); 
       await invoke('start_listener');
       addServerLog('success', 'Server started successfully');
     } catch (error) {
@@ -322,7 +319,7 @@ const ServerPage = () => {
         setIsServerRunning(true);
         addServerLog('info', 'Server was already running on port 12345');
       } else {
-        setIsServerRunning(false); // Reset on actual failure
+        setIsServerRunning(false); 
         setError(`Failed to start server: ${error}`);
         addServerLog('error', `Failed to start server: ${error}`);
       }
@@ -611,7 +608,6 @@ const ServerPage = () => {
     setIsEndingSession(true);
     addServerLog('info', 'Ending session: stopping EventSub (if active) and server listener');
     try {
-      // Attempt to stop Twitch EventSub first (ignore failures if not active)
       try {
         await invoke('twitch_stop_event_listener');
         addServerLog('info', 'EventSub listener stopped');
@@ -620,7 +616,6 @@ const ServerPage = () => {
       }
       await invoke('stop_listener');
       addServerLog('info', 'Server shutdown initiated');
-      // Fallback navigation if SERVER_STOPPED event never arrives
       setTimeout(() => {
         navigate('/');
       }, 4000);
@@ -805,7 +800,6 @@ const ServerPage = () => {
                     </div>
                   </div>
                   
-                  {/* Status Badge */}
                   <div className={`px-3 py-1.5 rounded-full text-xs font-semibold ${
                     isServerRunning 
                       ? 'bg-green-500/20 text-green-400 border border-green-500/30' 
@@ -815,12 +809,10 @@ const ServerPage = () => {
                   </div>
                 </div>
 
-                {/* Description */}
                 <p className="text-gray-400 text-sm mb-4">
                   {isServerRunning ? 'Ready to receive requests and process redemptions' : 'Server is not running'}
                 </p>
 
-                {/* Connection Status Section */}
                 {isServerRunning && (
                   <div className="mb-4">
                     <div className="flex items-center gap-3 p-3 bg-gray-700/30 rounded-lg border border-gray-600/30">
@@ -1067,7 +1059,6 @@ const ServerPage = () => {
                             </div>
                           )}
                           
-                          {/* TTS Generated Status */}
                           {generatedTTS[redemption.id] && (
                             <div className="flex items-center gap-2 mb-2">
                               <div className="w-2 h-2 bg-blue-400 rounded-full"></div>
@@ -1079,7 +1070,6 @@ const ServerPage = () => {
                         </div>
                       </div>
                       <div className="flex gap-2">
-                        {/* Show Send to Client button */}
                         {generatedTTS[redemption.id] && (
                           <motion.button
                             whileHover={isClientConnected ? { scale: 1.05 } : {}}
@@ -1106,7 +1096,6 @@ const ServerPage = () => {
                           </motion.button>
                         )}
                         
-                        {/* Accept/Reject buttons */}
                         {!generatedTTS[redemption.id] && (
                           <>
                             <motion.button
@@ -1222,7 +1211,6 @@ const ServerPage = () => {
                     <div className="text-cyan-400">[INFO] Listening for connections</div>
                     <div className="text-purple-400">[INFO] TTS system ready</div>
                     <div className="text-gray-300">[INFO] Ready to receive requests</div>
-                    {/* Dynamic server logs */}
                     {serverLogs.map((log, index) => (
                       <div 
                         key={index}

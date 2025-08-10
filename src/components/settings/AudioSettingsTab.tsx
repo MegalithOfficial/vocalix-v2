@@ -237,7 +237,6 @@ const AudioSettingsTab = ({ settingsState }: AudioSettingsTabProps) => {
         </div>
       </div>
 
-      {/* Audio element for testing */}
       <audio ref={audioRef} style={{ display: 'none' }} />
     </motion.div>
   );

@@ -200,9 +200,9 @@ pub async fn twitch_start_event_listener(
 
                 let common_subscriptions = create_common_subscriptions(&user_id);
                 if let Err(e) = event_sub.subscribe_to_events(common_subscriptions).await {
-                    window
-                        .emit("ERROR", format!("Failed to subscribe to events: {}", e))
-                        .unwrap();
+                    //window
+                    //    .emit("ERROR", format!("Failed to subscribe to events: {}", e))
+                    //    .unwrap();
                 } else {
                     window
                         .emit("STATUS_UPDATE", "Subscribed to Twitch events!")

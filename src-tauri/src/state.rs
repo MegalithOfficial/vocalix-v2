@@ -19,10 +19,22 @@ pub enum ConnectionState {
 }
 
 pub struct SessionKeys {
-    pub encryption_key: aead::LessSafeKey,
-    pub decryption_key: aead::LessSafeKey,
-    pub send_nonce: Arc<Mutex<u64>>,
-    pub recv_nonce: Arc<Mutex<u64>>,
+    // Directional AEAD keys
+    pub encryption_key: aead::LessSafeKey, // me -> peer
+    pub decryption_key: aead::LessSafeKey, // peer -> me
+
+    // Nonce sequencing
+    pub send_nonce: Arc<Mutex<u64>>, // local send sequence (monotonic)
+    pub recv_nonce: Arc<Mutex<Option<u64>>>,  // highest received sequence
+
+    // Context binding
+    pub session_id: [u8; 16], // bound into AAD
+    pub nonce_prefix_send: [u8; 4], // 12B nonce = prefix(4) || seq(8)
+    pub nonce_prefix_recv: [u8; 4],
+
+    // Key confirmation tags
+    pub confirm_send_tag: [u8; 16],
+    pub confirm_recv_tag: [u8; 16],
 }
 
 pub struct AppStateWithChannel {
@@ -41,39 +53,30 @@ pub struct TwitchState {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Message {
     Hello(Vec<u8>),
-    Challenge {
-        nonce: Vec<u8>,
-        listener_pub_key: Vec<u8>,
-    },
+    Challenge { nonce: Vec<u8>, listener_pub_key: Vec<u8> },
     ChallengeResponse(Vec<u8>),
 
-    // Key exchange for new peers
     InitialDhKey(Vec<u8>),
     ResponseDhKey(Vec<u8>),
 
-    PairingConfirmed, // Sent after user confirms pairing
+    PairingConfirmed, // after user confirms the same code
 
-    SessionKeyRequest(Vec<u8>),  // Ephemeral public key for session
-    SessionKeyResponse(Vec<u8>), // Ephemeral public key response
-    EncryptionReady,
+    SessionKeyRequest(Vec<u8>), // my ephemeral public key (SEC1)
+    SessionKeyResponse(Vec<u8>), // peer ephemeral public key (SEC1)
 
-    EncryptedMessage {
-        ciphertext: Vec<u8>,
-        nonce: [u8; 12],
-    },
+    KeyConfirm(Vec<u8>),
 
-    // Redemption protocol messages (server -> client only)
+    EncryptedMessage { ciphertext: Vec<u8>, nonce: [u8; 12] },
+
     RedemptionMessage {
         audio: Vec<u8>,
         title: String,
         content: String,
         message_type: u8,  // 0 = without timer, 1 = with timer
-        time: Option<u32>, // time in seconds, only present when message_type = 1
+        time: Option<u32>, // seconds
     },
 
     PlaintextMessage(String),
 
-    Disconnect {
-        reason: String,
-    },
+    Disconnect { reason: String },
 }

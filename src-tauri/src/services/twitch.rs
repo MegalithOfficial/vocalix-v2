@@ -322,7 +322,6 @@ impl TwitchEventSub {
                             warn!("WebSocket closed with code {}: {}", code, reason);
                             self.handle_close_code(code).await;
                             
-                            // For invalid reconnect URL, return special error to reset reconnect URL
                             if code == CLOSE_CODE_INVALID_RECONNECT {
                                 return Err(anyhow!("Invalid reconnect URL - falling back to original URL"));
                             }
@@ -341,7 +340,6 @@ impl TwitchEventSub {
                     }
                 }
 
-                // Monitor keepalive timeout
                 _ = keepalive_interval.tick() => {
                     let elapsed = last_message_time.elapsed();
                     if elapsed > current_keepalive_timeout + Duration::from_secs(5) {
@@ -673,49 +671,7 @@ pub fn create_common_subscriptions(
             "1",
             serde_json::json!({"broadcaster_user_id": broadcaster_user_id}),
         ),
-        (
-            "channel.follow",
-            "2",
-            serde_json::json!({
-                "broadcaster_user_id": broadcaster_user_id,
-                "moderator_user_id": broadcaster_user_id
-            }),
-        ),
-        (
-            "channel.subscribe",
-            "1",
-            serde_json::json!({"broadcaster_user_id": broadcaster_user_id}),
-        ),
-        (
-            "channel.subscription.gift",
-            "1",
-            serde_json::json!({"broadcaster_user_id": broadcaster_user_id}),
-        ),
-        (
-            "channel.subscription.message",
-            "1",
-            serde_json::json!({"broadcaster_user_id": broadcaster_user_id}),
-        ),
-        (
-            "channel.cheer",
-            "1",
-            serde_json::json!({"broadcaster_user_id": broadcaster_user_id}),
-        ),
-        (
-            "channel.raid",
-            "1",
-            serde_json::json!({"to_broadcaster_user_id": broadcaster_user_id}),
-        ),
-        (
-            "stream.online",
-            "1",
-            serde_json::json!({"broadcaster_user_id": broadcaster_user_id}),
-        ),
-        (
-            "stream.offline",
-            "1",
-            serde_json::json!({"broadcaster_user_id": broadcaster_user_id}),
-        ),
+        
     ]
 }
 

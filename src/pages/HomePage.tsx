@@ -129,7 +129,7 @@ const HomePage = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-900 via-black to-gray-900 flex overflow-y-auto overflow-x-hidden relative">
-      {/* Full-screen loading overlay */}
+      {/* loading overlay */}
       {isValidating && (
         <motion.div
           initial={{ opacity: 0 }}
@@ -144,7 +144,7 @@ const HomePage = () => {
         </motion.div>
       )}
 
-      {/* Left Panel - Branding */}
+      {/* Left Panel */}
       <motion.div
         initial={{ x: -50, opacity: 0 }}
         animate={{ x: 0, opacity: 1 }}
@@ -184,7 +184,7 @@ const HomePage = () => {
         </motion.div>
       </motion.div>
 
-      {/* Right Panel - Actions */}
+      {/* Right Panel */}
       <motion.div
         initial={{ x: 50, opacity: 0 }}
         animate={{ x: 0, opacity: 1 }}
@@ -290,7 +290,6 @@ const HomePage = () => {
         </motion.div>
       </motion.div>
 
-      {/* Validation Results Modal */}
       {showValidationResults && (
         <motion.div
           initial={{ opacity: 0 }}

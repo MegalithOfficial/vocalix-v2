@@ -60,7 +60,6 @@ export const useSettingsState = (activeTab?: string) => {
   const [autoConnectEnabled, setAutoConnectEnabled] = useState(false);
   const [autoConnectAddress, setAutoConnectAddress] = useState('');
 
-  // Prevent overlapping Twitch auth status checks
   const twitchAuthCheckInFlight = useRef(false);
 
   const checkTwitchAuthStatus = async () => {
@@ -265,7 +264,6 @@ export const useSettingsState = (activeTab?: string) => {
     } catch (error) {
       console.error('Error saving security settings:', error);
     }
-    // Persist auto-connect settings
     try {
       const store = await load('client-settings.json', { autoSave: true });
       await store.set('autoConnectEnabled', autoConnectEnabled);

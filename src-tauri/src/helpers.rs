@@ -266,7 +266,6 @@ pub async fn handle_twitch_event(
     Ok(())
 }
 
-/// Create a Command that runs without showing a console window on Windows
 pub fn create_hidden_command<P: AsRef<std::ffi::OsStr>>(program: P) -> std::process::Command {
     #[cfg(target_os = "windows")]
     {
