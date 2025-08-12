@@ -1,3 +1,4 @@
+use crate::{log_info, log_warn, log_error, log_debug, log_critical};
 use crate::services::p2p::handle_connection;
 use crate::state::{AppStateWithChannel, Message, ConnectionState};
 use tauri::{Emitter, State, Window, Manager, AppHandle};
@@ -39,17 +40,30 @@ pub async fn start_listener(
     window: Window,
     state: State<'_, AppStateWithChannel>,
 ) -> Result<(), String> {
+    log_info!("P2P", "Starting P2P listener on port 12345");
+    
     window
         .emit("STATUS_UPDATE", "Starting listener...")
         .unwrap();
+    
     let listener = TcpListener::bind("0.0.0.0:12345")
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            log_critical!("P2P", "Failed to bind listener to port 12345: {}", e);
+            e.to_string()
+        })?;
+    
+    log_info!("P2P", "Successfully bound listener to 0.0.0.0:12345");
     window
         .emit("STATUS_UPDATE", "Listening on 0.0.0.0:12345")
         .unwrap();
 
-    let (stream, addr) = listener.accept().await.map_err(|e| e.to_string())?;
+    let (stream, addr) = listener.accept().await.map_err(|e| {
+        log_error!("P2P", "Failed to accept connection: {}", e);
+        e.to_string()
+    })?;
+    
+    log_info!("P2P", "Accepted connection from {}", addr);
     window
         .emit(
             "STATUS_UPDATE",
@@ -67,6 +81,7 @@ pub async fn start_listener(
         false,
     ));
 
+    log_debug!("P2P", "Connection handler spawned for incoming connection");
     Ok(())
 }
 
@@ -219,6 +234,7 @@ pub async fn stop_listener(
                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
             },
             Err(e) => {
+                log_warn!("P2P", "Failed to send disconnect message to client: {}", e);
                 println!("Failed to send disconnect message to client: {}", e);
                 window.emit("STATUS_UPDATE", format!("Failed to notify client: {}", e)).ok();
             }

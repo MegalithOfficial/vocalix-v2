@@ -3,7 +3,7 @@ use crate::services::twitch::{create_common_subscriptions, TwitchEventSub};
 use crate::services::twitch_oauth::TwitchAuthManager;
 use std::sync::Arc;
 use crate::state::TwitchState;
-use crate::{log_error, log_info};
+use crate::{log_error, log_info, log_warn, log_debug, log_critical};
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, State, Window};
 
@@ -32,6 +32,7 @@ pub async fn twitch_authenticate(
 
     match auth_manager.start_device_flow_async().await {
         Ok(device_response) => {
+            log_debug!("TwitchAuth", "Device flow started successfully");
 
             *twitch_state.auth_manager.lock().await = Some(auth_manager.clone());
 
@@ -115,6 +116,7 @@ pub async fn twitch_authenticate(
             )
         }
         Err(e) => {
+            log_warn!("TwitchAuth", "Device flow start failed: {}", e);
             window
                 .emit("ERROR", format!("Failed to start device flow: {}", e))
                 .unwrap();
@@ -142,7 +144,10 @@ pub async fn twitch_start_event_listener(
         let guard = twitch_state.auth_manager.lock().await;
         match guard.as_ref() {
             Some(m) => m.clone(),
-            None => return Err("Not authenticated with Twitch".to_string()),
+            None => {
+                log_critical!("TwitchEventSub", "Attempted to start event listener without authentication");
+                return Err("Not authenticated with Twitch".to_string());
+            }
         }
     };
 
@@ -199,7 +204,7 @@ pub async fn twitch_start_event_listener(
                 }
 
                 let common_subscriptions = create_common_subscriptions(&user_id);
-                if let Err(e) = event_sub.subscribe_to_events(common_subscriptions).await {
+                if let Err(_e) = event_sub.subscribe_to_events(common_subscriptions).await {
                     //window
                     //    .emit("ERROR", format!("Failed to subscribe to events: {}", e))
                     //    .unwrap();

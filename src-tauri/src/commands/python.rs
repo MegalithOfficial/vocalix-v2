@@ -1,4 +1,4 @@
-use crate::{log_info, log_warn};
+use crate::{log_info, log_warn, log_error, log_debug, log_critical};
 use crate::helpers::create_hidden_command;
 use tauri::{AppHandle, Emitter, Manager, Window};
 
@@ -11,21 +11,35 @@ pub async fn save_pth_model(
     use base64::{engine::general_purpose::STANDARD as Base64Engine, Engine};
     use std::fs;
 
+    log_debug!("ModelManager", "Saving PTH model: {}", file_name);
+
     let app_data_dir = app
         .path()
         .app_data_dir()
-        .map_err(|e| format!("Failed to get app data directory: {}", e))?;
+        .map_err(|e| {
+            log_error!("ModelManager", "Failed to get app data directory: {}", e);
+            format!("Failed to get app data directory: {}", e)
+        })?;
 
     let model_dir = app_data_dir.join("pythonenv").join("models");
     fs::create_dir_all(&model_dir)
-        .map_err(|e| format!("Failed to create model directory: {}", e))?;
+        .map_err(|e| {
+            log_error!("ModelManager", "Failed to create model directory: {}", e);
+            format!("Failed to create model directory: {}", e)
+        })?;
 
     let file_data = Base64Engine
         .decode(&base64_data)
-        .map_err(|e| format!("Failed to decode base64 data: {}", e))?;
+        .map_err(|e| {
+            log_error!("ModelManager", "Failed to decode base64 data: {}", e);
+            format!("Failed to decode base64 data: {}", e)
+        })?;
 
     let file_path = model_dir.join(&file_name);
-    fs::write(&file_path, file_data).map_err(|e| format!("Failed to write model file: {}", e))?;
+    fs::write(&file_path, file_data).map_err(|e| {
+        log_error!("ModelManager", "Failed to write model file: {}", e);
+        format!("Failed to write model file: {}", e)
+    })?;
 
     log_info!("ModelManager", "Model file saved: {:?}", file_path);
     Ok(())
@@ -132,6 +146,11 @@ pub async fn setup_python_environment(
         .arg("--version")
         .output()
         .map_err(|e| {
+            log_critical!(
+                "PythonEnvironment",
+                "Python not found during environment setup: {}",
+                e
+            );
             format!(
                 "Python not found. Please install Python 3.10 or higher. Error: {}",
                 e

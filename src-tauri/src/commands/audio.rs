@@ -1,4 +1,4 @@
-use crate::log_info;
+use crate::{log_info, log_warn, log_error, log_debug, log_critical};
 use tauri::{AppHandle, Manager};
 use std::sync::Mutex;
 use std::process::Child;
@@ -12,9 +12,9 @@ pub async fn save_audio_file(
     file_name: String,
     base64_data: String,
 ) -> Result<(), String> {
-    log_info!(
+    log_debug!(
         "AudioManager",
-        "Saving audio file: {} for redemption: {}",
+        "Starting to save audio file: {} for redemption: {}",
         file_name,
         redemption_name
     );
@@ -25,19 +25,31 @@ pub async fn save_audio_file(
     let app_data_dir = app
         .path()
         .app_data_dir()
-        .map_err(|e| format!("Failed to get app data directory: {}", e))?;
+        .map_err(|e| {
+            log_error!("AudioManager", "Failed to get app data directory: {}", e);
+            format!("Failed to get app data directory: {}", e)
+        })?;
 
     let dir_path = app_data_dir.join("static_audios").join(&redemption_name);
     fs::create_dir_all(&dir_path)
-        .map_err(|e| format!("Failed to create directory {:?}: {}", dir_path, e))?;
+        .map_err(|e| {
+            log_error!("AudioManager", "Failed to create directory {:?}: {}", dir_path, e);
+            format!("Failed to create directory {:?}: {}", dir_path, e)
+        })?;
 
     let audio_data = general_purpose::STANDARD
         .decode(&base64_data)
-        .map_err(|e| format!("Failed to decode base64 data: {}", e))?;
+        .map_err(|e| {
+            log_error!("AudioManager", "Failed to decode base64 data: {}", e);
+            format!("Failed to decode base64 data: {}", e)
+        })?;
 
     let file_path = dir_path.join(&file_name);
     fs::write(&file_path, audio_data)
-        .map_err(|e| format!("Failed to write file {:?}: {}", file_path, e))?;
+        .map_err(|e| {
+            log_critical!("AudioManager", "Failed to write file {:?}: {}", file_path, e);
+            format!("Failed to write file {:?}: {}", file_path, e)
+        })?;
 
     log_info!("AudioManager", "Saved audio file: {:?}", file_path);
     Ok(())
@@ -73,6 +85,8 @@ pub async fn get_audio_files(
             if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
                 if file_name.ends_with(".mp3") {
                     files.push(file_name.to_string());
+                } else {
+                    log_warn!("AudioManager", "Skipping non-mp3 file: {}", file_name);
                 }
             }
         }

@@ -1,3 +1,4 @@
+use crate::{log_info, log_warn, log_error, log_debug, log_critical};
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use futures_util::{SinkExt, StreamExt};
@@ -164,6 +165,7 @@ impl Clone for TwitchEventSub {
 
 impl TwitchEventSub {
     pub fn new(client_id: String, access_token: String) -> Self {
+        log_info!("TwitchEventSub", "Creating new TwitchEventSub instance");
         Self {
             client_id,
             access_token,
@@ -204,6 +206,7 @@ impl TwitchEventSub {
         loop {
             let attempts = *self.reconnect_attempts.lock().await;
             if attempts >= MAX_RECONNECT_ATTEMPTS {
+                log_critical!("TwitchEventSub", "Maximum reconnect attempts exceeded: {}", attempts);
                 self.set_connection_state(EventSubConnectionState::Failed)
                     .await;
                 return Err(anyhow!(
@@ -231,6 +234,7 @@ impl TwitchEventSub {
                     error!("Connection failed (attempt {}): {}", attempts + 1, e);
 
                     if e.to_string().contains("Invalid reconnect URL") {
+                        log_warn!("TwitchEventSub", "Invalid reconnect URL received, falling back to original EventSub URL");
                         warn!("Invalid reconnect URL received, falling back to original EventSub URL");
                         reconnect_url = None;
                     }
@@ -254,7 +258,10 @@ impl TwitchEventSub {
         info!("Connecting to EventSub WebSocket: {}", url);
 
         let parsed_url = Url::parse(&url)
-            .map_err(|e| anyhow!("Failed to parse WebSocket URL '{}': {}", url, e))?;
+            .map_err(|e| {
+                log_error!("TwitchEventSub", "Failed to parse WebSocket URL '{}': {}", url, e);
+                anyhow!("Failed to parse WebSocket URL '{}': {}", url, e)
+            })?;
         
         if parsed_url.scheme() != "wss" {
             return Err(anyhow!("Invalid URL scheme '{}', expected 'wss'", parsed_url.scheme()));
@@ -286,6 +293,7 @@ impl TwitchEventSub {
                 message = read.next() => {
                     match message {
                         Some(Ok(Message::Text(text))) => {
+                            log_debug!("TwitchEventSub", "Received WebSocket text message");
                             last_message_time = tokio::time::Instant::now();
                             match self.handle_websocket_message(&text).await {
                                 Ok(Some(reconnect_url)) => {

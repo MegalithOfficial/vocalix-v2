@@ -1,4 +1,4 @@
-use crate::log_info;
+use crate::{log_info, log_warn, log_error, log_debug, log_critical};
 use crate::helpers::create_hidden_command;
 use tauri::{AppHandle, Emitter, Manager};
 use base64::{Engine as _, engine::general_purpose};
@@ -7,21 +7,35 @@ use base64::{Engine as _, engine::general_purpose};
 pub async fn save_tts_settings(app: AppHandle, config: serde_json::Value) -> Result<(), String> {
     use std::fs;
 
+    log_debug!("TTSSettings", "Saving TTS settings: {:?}", config);
+
     let app_data_dir = app
         .path()
         .app_data_dir()
-        .map_err(|e| format!("Failed to get app data directory: {}", e))?;
+        .map_err(|e| {
+            log_error!("TTSSettings", "Failed to get app data directory: {}", e);
+            format!("Failed to get app data directory: {}", e)
+        })?;
 
     fs::create_dir_all(&app_data_dir)
-        .map_err(|e| format!("Failed to create app data directory: {}", e))?;
+        .map_err(|e| {
+            log_error!("TTSSettings", "Failed to create app data directory: {}", e);
+            format!("Failed to create app data directory: {}", e)
+        })?;
 
     let config_path = app_data_dir.join("texttospeech.json");
 
     let config_str = serde_json::to_string_pretty(&config)
-        .map_err(|e| format!("Failed to serialize config: {}", e))?;
+        .map_err(|e| {
+            log_error!("TTSSettings", "Failed to serialize config: {}", e);
+            format!("Failed to serialize config: {}", e)
+        })?;
 
     fs::write(&config_path, config_str)
-        .map_err(|e| format!("Failed to write TTS config: {}", e))?;
+        .map_err(|e| {
+            log_error!("TTSSettings", "Failed to write TTS config: {}", e);
+            format!("Failed to write TTS config: {}", e)
+        })?;
 
     log_info!("TTSSettings", "TTS settings saved to {:?}", config_path);
     Ok(())
@@ -54,7 +68,10 @@ fn venv_paths(app: &AppHandle) -> Result<(std::path::PathBuf, std::path::PathBuf
     let app_data_dir = app
         .path()
         .app_data_dir()
-        .map_err(|e| format!("Failed to get app data directory: {}", e))?;
+        .map_err(|e| {
+            log_error!("TTS", "Failed to get app data directory for venv: {}", e);
+            format!("Failed to get app data directory: {}", e)
+        })?;
     let pythonenv = app_data_dir.join("pythonenv");
     let py = if cfg!(windows) {
         pythonenv.join("Scripts").join("python.exe")
@@ -62,8 +79,10 @@ fn venv_paths(app: &AppHandle) -> Result<(std::path::PathBuf, std::path::PathBuf
         pythonenv.join("bin").join("python")
     };
     if !py.exists() {
+        log_critical!("TTS", "Python virtual environment not found at: {:?}", py);
         return Err("Python virtual environment not found. Please set up Python Environment.".to_string());
     }
+    log_debug!("TTS", "Using Python venv: {:?}", py);
     Ok((pythonenv, py))
 }
 
@@ -143,6 +162,7 @@ pub async fn generate_tts(
         cfg.get("selectedModel").and_then(|v| v.as_str()).unwrap_or("").to_string()
     };
     if model.is_empty() {
+        log_warn!("TTS", "RVC mode requested but no model selected");
         app.emit("tts_status", serde_json::json!({"progress": 0, "status": "error_model_not_selected"})).ok();
         return Err("RVC model file not selected".to_string());
     }
