@@ -124,25 +124,22 @@ impl Logger {
             entry.message
         );
 
-        let log_file_path = self.log_file_path.clone();
-        tokio::spawn(async move {
-            use std::fs::{create_dir_all, OpenOptions};
-            use std::io::Write;
-            use std::path::Path;
+        use std::fs::{create_dir_all, OpenOptions};
+        use std::io::Write;
+        use std::path::Path;
 
-            if let Some(parent) = Path::new(&log_file_path).parent() {
-                let _ = create_dir_all(parent);
-            }
+        if let Some(parent) = Path::new(&self.log_file_path).parent() {
+            let _ = create_dir_all(parent);
+        }
 
-            if let Ok(mut file) = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&log_file_path)
-            {
-                let _ = file.write_all(log_line.as_bytes());
-                let _ = file.flush();
-            }
-        });
+        if let Ok(mut file) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.log_file_path)
+        {
+            let _ = file.write_all(log_line.as_bytes());
+            let _ = file.flush();
+        }
     }
 
     pub fn get_logs(&self) -> Vec<LogEntry> {

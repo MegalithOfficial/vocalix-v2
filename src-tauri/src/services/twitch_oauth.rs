@@ -5,6 +5,7 @@ use reqwest;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
+
 const TWITCH_DEVICE_URL: &str = "https://id.twitch.tv/oauth2/device";
 const TWITCH_TOKEN_URL: &str = "https://id.twitch.tv/oauth2/token";
 const TWITCH_VALIDATE_URL: &str = "https://id.twitch.tv/oauth2/validate";
