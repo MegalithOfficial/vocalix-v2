@@ -63,7 +63,10 @@ pub async fn handle_connection(
     let mut session_keys: Option<SessionKeys> = None;
 
     let mut local_confirmed = false;
-    let mut peer_confirmed = false;
+    let mut peer_confirmed  = false;
+
+    let mut confirm_sent = false;
+    let mut confirm_retry_deadline: Option<std::time::Instant> = None;
 
     let mut sent_initial_dh = false;
     let mut sent_response_dh = false;
@@ -128,10 +131,16 @@ pub async fn handle_connection(
                             log_and_emit(&window, role, "AUTO_CONFIRM", "Known peer: auto-sending PairingConfirmed").await;
                             if !local_confirmed {
                                 local_confirmed = true;
-                                send_message(&mut stream, &Message::PairingConfirmed).await;
                             }
+                            if !confirm_sent {
+                                send_message(&mut stream, &Message::PairingConfirmed).await;
+                                confirm_sent = true;
+                                confirm_retry_deadline = Some(std::time::Instant::now() + std::time::Duration::from_secs(5));
+                            }
+
                             let (nonce, listener_pub_key) = crate::services::pairing::create_challenge();
                             send_message(&mut stream, &Message::Challenge { nonce, listener_pub_key }).await;
+                            log_and_emit(&window, role, "CHALLENGE_SENT", "Sent Challenge (known peer)").await;
                         } else {
                             log_and_emit(&window, role, "NEW_PEER", "Unknown peer, starting DH key exchange").await;
                             let (privkey, pubkey_bytes) = crate::services::pairing::perform_initial_dh();
@@ -141,6 +150,7 @@ pub async fn handle_connection(
 
                             let (nonce, listener_pub_key) = crate::services::pairing::create_challenge();
                             send_message(&mut stream, &Message::Challenge { nonce, listener_pub_key }).await;
+                            log_and_emit(&window, role, "CHALLENGE_SENT", "Sent Challenge (new peer)").await;
                         }
                     }
 
@@ -154,14 +164,19 @@ pub async fn handle_connection(
                                 is_known_peer = true;
                                 if is_initiator && !local_confirmed {
                                     local_confirmed = true;
+                                }
+                                if is_initiator && !confirm_sent {
                                     send_message(&mut stream, &Message::PairingConfirmed).await;
-                                    log_and_emit(&window, role, "AUTO_CONFIRM", "Known peer (from Challenge): auto-sent PairingConfirmed").await;
+                                    confirm_sent = true;
+                                    confirm_retry_deadline = Some(std::time::Instant::now() + std::time::Duration::from_secs(5));
+                                    log_and_emit(&window, role, "AUTO_CONFIRM", "Known peer (from Challenge): PairingConfirmed sent").await;
                                 }
                             }
                         }
 
                         let sig = crate::services::pairing::create_challenge_signature(&state, nonce, listener_pub_key);
                         send_message(&mut stream, &Message::ChallengeResponse(sig)).await;
+                        log_and_emit(&window, role, "CHALLENGE_RESPONSE_SENT", "Signed & sent challenge response").await;
 
                         if !is_known_peer && !sent_initial_dh && !sent_response_dh {
                             let (privkey, pubkey_bytes) = crate::services::pairing::perform_initial_dh();
@@ -389,14 +404,12 @@ pub async fn handle_connection(
                 }
             }
 
-            // --- UI / APP MESSAGES (kept feature-complete) ---
             msg = rx.recv() => {
                 if let Some(message) = msg {
                     log_and_emit(&window, role, "UI_MESSAGE_REQUEST", &format!("UI wants to send: {}", message)).await;
 
                     match connection_state {
                         ConnectionState::Encrypted => {
-                            // 1) UI "Message" JSON'ı gönderiyorsa ayrıştır
                             if let Ok(parsed) = serde_json::from_str::<Message>(&message) {
                                 match parsed {
                                     Message::Disconnect { .. } => {
@@ -457,12 +470,28 @@ pub async fn handle_connection(
                     }
                 }
             }
+        } 
+
+        if confirm_sent && !peer_confirmed {
+            if let Some(deadline) = confirm_retry_deadline {
+                if std::time::Instant::now() >= deadline {
+                    log_and_emit(&window, role, "PAIRING_CONFIRM_RESEND", "Peer confirm not seen; resending once").await;
+                    send_message(&mut stream, &Message::PairingConfirmed).await;
+                    confirm_retry_deadline = None; 
+                }
+            }
         }
 
         while let Ok(confirmed) = confirmation_rx.try_recv() {
             if confirmed && !local_confirmed {
                 local_confirmed = true;
                 log_and_emit(&window, role, "USER_CONFIRMATION", "User confirmed pairing").await;
+
+                if !confirm_sent {
+                    send_message(&mut stream, &Message::PairingConfirmed).await;
+                    confirm_sent = true;
+                    confirm_retry_deadline = Some(std::time::Instant::now() + std::time::Duration::from_secs(5));
+                }
 
                 if peer_confirmed && is_initiator {
                     log_and_emit(&window, role, "POST_PAIRING_SESSION_REQUEST", "Requesting session keys after both confirmed").await;

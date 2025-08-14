@@ -3,7 +3,7 @@ use p256::ecdsa::{SigningKey, Signature, VerifyingKey};
 use p256::ecdsa::signature::{Signer, Verifier};
 
 use rand_core::{OsRng, RngCore};
-use ring::{aead, digest, hkdf, hmac};
+use ring::{aead, digest, hkdf};
 use serde::{Deserialize, Serialize};
 use ::hkdf::Hkdf;
 use sha2::Sha256;
@@ -163,7 +163,7 @@ pub fn verify_challenge_signature(
     if let Ok(sig) = Signature::from_der(signature) {
         return vk.verify(&msg, &sig).is_ok();
     }
-    
+
     if signature.len() == 64 {
         if let Ok(sig) = Signature::from_bytes(signature.try_into().unwrap()) {
             return vk.verify(&msg, &sig).is_ok();
