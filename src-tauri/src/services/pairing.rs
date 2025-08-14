@@ -1,4 +1,7 @@
-use p256::{ecdh::EphemeralSecret, ecdsa::SigningKey, PublicKey};
+use p256::{ecdh::EphemeralSecret, PublicKey};
+use p256::ecdsa::{SigningKey, Signature, VerifyingKey};
+use p256::ecdsa::signature::{Signer, Verifier};
+
 use rand_core::{OsRng, RngCore};
 use ring::{aead, digest, hkdf, hmac};
 use serde::{Deserialize, Serialize};
@@ -126,28 +129,47 @@ pub fn create_challenge() -> (Vec<u8>, Vec<u8>) {
 }
 
 pub fn create_challenge_signature(
-    _state: &AppState,
+    state: &AppState,
     nonce: &Vec<u8>,
-    _listener_pub_key: &Vec<u8>,
+    listener_pub_key: &Vec<u8>,
 ) -> Vec<u8> {
-    let mac_key = device_mac_key();
-    hmac::sign(&hmac::Key::new(hmac::HMAC_SHA256, &mac_key), nonce)
+    let sk = state
+        .device_identity
+        .blocking_lock()
         .as_ref()
-        .to_vec()
+        .expect("device identity not loaded")
+        .clone();
+
+    let mut msg = b"sdl challenge v1".to_vec();
+    msg.extend_from_slice(listener_pub_key);
+    msg.extend_from_slice(nonce);
+
+    let sig: Signature = sk.sign(&msg);
+    sig.to_der().as_bytes().to_vec()
 }
 
-pub fn verify_challenge_signature(_state: &AppState, signature: &Vec<u8>) -> bool {
-    if let Some(nonce) = get_last_challenge_nonce() {
-        let mac_key = device_mac_key();
-        hmac::verify(
-            &hmac::Key::new(hmac::HMAC_SHA256, &mac_key),
-            &nonce,
-            signature,
-        )
-        .is_ok()
-    } else {
-        false
+pub fn verify_challenge_signature(
+    peer_device_pubkey: &[u8],
+    listener_pub_key: &[u8],
+    signature: &[u8],
+) -> bool {
+    let Some(nonce) = get_last_challenge_nonce() else { return false; };
+
+    let mut msg = b"sdl challenge v1".to_vec();
+    msg.extend_from_slice(listener_pub_key);
+    msg.extend_from_slice(&nonce);
+
+    let Ok(vk) = VerifyingKey::from_sec1_bytes(peer_device_pubkey) else { return false; };
+    if let Ok(sig) = Signature::from_der(signature) {
+        return vk.verify(&msg, &sig).is_ok();
     }
+    
+    if signature.len() == 64 {
+        if let Ok(sig) = Signature::from_bytes(signature.try_into().unwrap()) {
+            return vk.verify(&msg, &sig).is_ok();
+        }
+    }
+    false
 }
 
 fn device_mac_key() -> Vec<u8> {

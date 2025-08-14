@@ -42,18 +42,15 @@ pub async fn handle_connection(
     {
         let mut kp = state.known_peers.lock().await;
         if kp.is_empty() {
-            match crate::services::pairing::load_known_peers() {
-                Ok(loaded) => {
-                    *kp = loaded;
-                    println!("[BOOT] loaded {} known peers", kp.len());
-                }
-                Err(e) => eprintln!("[BOOT] failed to load known_peers: {}", e),
+            if let Ok(loaded) = crate::services::pairing::load_known_peers() {
+                *kp = loaded;
             }
         }
     }
 
     let mut connection_state = ConnectionState::Authenticating;
     update_shared_connection_state(&window, Some(connection_state.clone())).await;
+
     log_and_emit(
         &window,
         role,
@@ -74,6 +71,8 @@ pub async fn handle_connection(
     let mut peer_pubkey_hex_cache: Option<String> = None;
     let mut is_known_peer = false;
 
+    let mut peer_device_pk_bytes: Option<Vec<u8>> = None;
+
     let (tx, mut rx) = mpsc::unbounded_channel();
     {
         let mut guard = message_tx.lock().await;
@@ -93,24 +92,36 @@ pub async fn handle_connection(
                     Ok(Some(b)) => { last_activity = std::time::Instant::now(); b },
                     Ok(None) => {
                         log_and_emit(&window, role, "CONNECTION_CLOSED", "Peer closed connection").await;
-                        clear_shared_connection_state(&window).await; break;
-                    },
+                        clear_shared_connection_state(&window).await;
+                        break;
+                    }
                     Err(e) => {
-                        log_and_emit(&window, role, "READ_ERROR", &format!("Read error: {}", e)).await;
-                        clear_shared_connection_state(&window).await; break;
+                        log_and_emit(&window, role, "READ_ERROR", &format!("Failed to read: {}", e)).await;
+                        clear_shared_connection_state(&window).await;
+                        break;
                     }
                 };
+
                 let received_msg: Message = match serde_json::from_slice(&bytes) {
                     Ok(m) => m,
-                    Err(e) => { log_and_emit(&window, role, "DECODE_ERROR", &format!("Failed to decode message: {}", e)).await; continue; }
+                    Err(e) => {
+                        log_and_emit(&window, role, "DECODE_ERROR", &format!("json decode: {}", e)).await;
+                        continue;
+                    }
                 };
+
                 log_and_emit(&window, role, "MESSAGE_RECEIVED", &format!("{:?}", &received_msg)).await;
 
                 match (&connection_state, &received_msg) {
                     (ConnectionState::Authenticating, Message::Hello(peer_key)) => {
                         let peer_hex = hex::encode(peer_key);
                         peer_pubkey_hex_cache = Some(peer_hex.clone());
-                        is_known_peer = { let kp = state.known_peers.lock().await; kp.contains_key(&peer_hex) };
+                        peer_device_pk_bytes = Some(peer_key.clone());
+
+                        is_known_peer = {
+                            let kp = state.known_peers.lock().await;
+                            kp.contains_key(&peer_hex)
+                        };
                         log_and_emit(&window, role, "HELLO_RECEIVED", &format!("From peer: {}...", &peer_hex[..16])).await;
 
                         if is_known_peer {
@@ -139,10 +150,8 @@ pub async fn handle_connection(
                         if peer_pubkey_hex_cache.is_none() {
                             let hex_pk = hex::encode(listener_pub_key);
                             peer_pubkey_hex_cache = Some(hex_pk.clone());
-                            let known = { state.known_peers.lock().await.contains_key(&hex_pk) };
-                            if known && !is_known_peer {
+                            if state.known_peers.lock().await.contains_key(&hex_pk) && !is_known_peer {
                                 is_known_peer = true;
-                                log_and_emit(&window, role, "KNOWN_FROM_CHALLENGE", "Peer recognized from listener_pub_key").await;
                                 if is_initiator && !local_confirmed {
                                     local_confirmed = true;
                                     send_message(&mut stream, &Message::PairingConfirmed).await;
@@ -151,7 +160,7 @@ pub async fn handle_connection(
                             }
                         }
 
-                        let sig = crate::services::pairing::create_challenge_signature(&state, nonce, &Vec::new());
+                        let sig = crate::services::pairing::create_challenge_signature(&state, nonce, listener_pub_key);
                         send_message(&mut stream, &Message::ChallengeResponse(sig)).await;
 
                         if !is_known_peer && !sent_initial_dh && !sent_response_dh {
@@ -176,21 +185,26 @@ pub async fn handle_connection(
                     (ConnectionState::Authenticating, Message::ChallengeResponse(signature))
                     | (ConnectionState::WaitingForUserConfirmation, Message::ChallengeResponse(signature))
                     | (ConnectionState::WaitingForPeerConfirmation, Message::ChallengeResponse(signature)) => {
-                        if crate::services::pairing::verify_challenge_signature(&state, signature) {
-                            log_and_emit(&window, role, "CHALLENGE_OK", "Challenge verified").await;
+                        if let Some(ref peer_pk) = peer_device_pk_bytes {
+                            if crate::services::pairing::verify_challenge_signature(peer_pk, &my_public_key_bytes, signature) {
+                                log_and_emit(&window, role, "CHALLENGE_OK", "Challenge verified").await;
+                            } else {
+                                log_and_emit(&window, role, "CHALLENGE_FAIL", "Challenge verification failed").await;
+                                window.emit("ERROR", "Challenge verification failed").ok();
+                                break;
+                            }
                         } else {
-                            log_and_emit(&window, role, "CHALLENGE_FAIL", "Challenge verification failed").await;
-                            window.emit("ERROR", "Challenge verification failed").ok();
+                            log_and_emit(&window, role, "CHALLENGE_FAIL", "No peer device key cached (Hello missing)").await;
+                            window.emit("ERROR", "Protocol error: no peer identity").ok();
                             break;
                         }
                     }
 
                     (ConnectionState::Authenticating, Message::InitialDhKey(peer_dh_key_bytes))
                     | (ConnectionState::WaitingForUserConfirmation, Message::InitialDhKey(peer_dh_key_bytes)) => {
-                        if is_known_peer { }
-                        else {
-                            match p256::PublicKey::from_sec1_bytes(peer_dh_key_bytes) {
-                                Ok(peer_public_key) => {
+                        match p256::PublicKey::from_sec1_bytes(peer_dh_key_bytes) {
+                            Ok(peer_public_key) => {
+                                if !is_known_peer {
                                     let (privkey, my_eph_pub_bytes) = crate::services::pairing::perform_initial_dh();
                                     temp_dh_private_key = Some(privkey);
                                     send_message(&mut stream, &Message::ResponseDhKey(my_eph_pub_bytes)).await;
@@ -203,30 +217,29 @@ pub async fn handle_connection(
                                     connection_state = ConnectionState::WaitingForUserConfirmation;
                                     update_shared_connection_state(&window, Some(connection_state.clone())).await;
                                 }
-                                Err(e) => log_and_emit(&window, role, "INITIAL_DH_PARSE_ERROR", &format!("Invalid peer DH key: {}", e)).await,
                             }
+                            Err(e) => log_and_emit(&window, role, "INITIAL_DH_PARSE_ERROR", &format!("Invalid peer DH key: {}", e)).await,
                         }
                     }
 
                     (ConnectionState::Authenticating, Message::ResponseDhKey(peer_dh_key_bytes))
                     | (ConnectionState::WaitingForUserConfirmation, Message::ResponseDhKey(peer_dh_key_bytes)) => {
-                        if is_known_peer { }
-                        else {
-                            match p256::PublicKey::from_sec1_bytes(peer_dh_key_bytes) {
-                                Ok(peer_public_key) => {
-                                    let code = crate::services::pairing::generate_pairing_code(&peer_public_key);
-                                    window.emit("PAIRING_REQUIRED", code).ok();
-                                    log_and_emit(&window, role, "PAIRING_CODE_SHOWN", "Waiting for user confirmation...").await;
+                        match p256::PublicKey::from_sec1_bytes(peer_dh_key_bytes) {
+                            Ok(peer_public_key) => {
+                                let code = crate::services::pairing::generate_pairing_code(&peer_public_key);
+                                window.emit("PAIRING_REQUIRED", code).ok();
+                                log_and_emit(&window, role, "PAIRING_CODE_SHOWN", "Waiting for user confirmation...").await;
 
-                                    connection_state = ConnectionState::WaitingForUserConfirmation;
-                                    update_shared_connection_state(&window, Some(connection_state.clone())).await;
-                                }
-                                Err(e) => log_and_emit(&window, role, "RESPONSE_DH_PARSE_ERROR", &format!("Invalid response DH key: {}", e)).await,
+                                connection_state = ConnectionState::WaitingForUserConfirmation;
+                                update_shared_connection_state(&window, Some(connection_state.clone())).await;
                             }
+                            Err(e) => log_and_emit(&window, role, "RESP_DH_PARSE_ERROR", &format!("Invalid response DH key: {}", e)).await,
                         }
                     }
 
-                    (_, Message::PairingConfirmed) => {
+                    (ConnectionState::WaitingForUserConfirmation, Message::PairingConfirmed)
+                    | (ConnectionState::Authenticating, Message::PairingConfirmed)
+                    | (ConnectionState::WaitingForPeerConfirmation, Message::PairingConfirmed) => {
                         if !peer_confirmed {
                             peer_confirmed = true;
                             log_and_emit(&window, role, "PEER_CONFIRMED", "Peer has confirmed pairing").await;
@@ -268,6 +281,7 @@ pub async fn handle_connection(
                                 if let Some(ref keys) = session_keys {
                                     send_message(&mut stream, &Message::KeyConfirm(keys.confirm_send_tag.to_vec())).await;
                                     log_and_emit(&window, role, "KEY_CONFIRM_SENT", "Sent key confirmation tag").await;
+                                    window.emit("SUCCESS", "Session keys established. Awaiting key confirmation...").ok();
                                 }
 
                                 connection_state = ConnectionState::WaitingForPeerConfirmation;
@@ -306,8 +320,6 @@ pub async fn handle_connection(
 
                                     connection_state = ConnectionState::WaitingForPeerConfirmation;
                                     update_shared_connection_state(&window, Some(connection_state.clone())).await;
-
-                                    window.emit("SUCCESS", "Session keys established. Awaiting key confirmation...").ok();
                                 }
                                 Err(e) => {
                                     log_and_emit(&window, role, "SESSION_KEY_ERROR", &format!("Failed to create session keys: {}", e)).await;
@@ -358,74 +370,117 @@ pub async fn handle_connection(
                                     handle_decrypted(&window, plaintext).await;
                                 }
                                 Err(e) => {
-                                    log_and_emit(&window, role, "DECRYPT_FAIL", &format!("{}", e)).await;
+                                    log_and_emit(&window, role, "DECRYPT_FAIL", &format!("Decryption failed: {}", e)).await;
+                                    window.emit("ERROR", format!("Decrypt error: {}", e)).ok();
+                                    break;
                                 }
                             }
                         }
                     }
 
-                    _ => {
+                    (_, Message::Disconnect { reason }) => {
+                        log_and_emit(&window, role, "DISCONNECT", &format!("Peer requested disconnect: {}", reason)).await;
+                        break;
+                    }
+
+                    (_, _) => {
                         log_and_emit(&window, role, "IGNORED", &format!("State {:?} ignored message", connection_state)).await;
                     }
                 }
             }
 
+            // --- UI / APP MESSAGES (kept feature-complete) ---
             msg = rx.recv() => {
                 if let Some(message) = msg {
                     log_and_emit(&window, role, "UI_MESSAGE_REQUEST", &format!("UI wants to send: {}", message)).await;
+
                     match connection_state {
                         ConnectionState::Encrypted => {
-                            if let Ok(redemption_msg) = serde_json::from_str::<Message>(&message) {
-                                if let Message::RedemptionMessage { audio, title, content, message_type, time } = redemption_msg {
-                                    send_redemption_message(&mut stream, &session_keys, audio, title, content, message_type, time).await;
-                                } else {
-                                    window.emit("ERROR", "Invalid redemption message format").ok();
-                                }
-                            } else {
-                                if let Some(ref keys) = session_keys {
-                                    match encrypt_message(keys, &message).await {
-                                        Ok((ciphertext, nonce)) => {
-                                            send_message(&mut stream, &Message::EncryptedMessage { ciphertext, nonce }).await;
-                                        }
-                                        Err(e) => {
-                                            log_and_emit(&window, role, "PLAINTEXT_ENCRYPT_FAIL", &format!("Encryption failed: {}", e)).await;
+                            // 1) UI "Message" JSON'ı gönderiyorsa ayrıştır
+                            if let Ok(parsed) = serde_json::from_str::<Message>(&message) {
+                                match parsed {
+                                    Message::Disconnect { .. } => {
+                                        send_message(&mut stream, &parsed).await;
+                                    }
+                                    Message::RedemptionMessage { audio, title, content, message_type, time } => {
+                                        send_redemption_message(
+                                            &mut stream,
+                                            &session_keys,
+                                            audio, title, content, message_type, time
+                                        ).await;
+                                    }
+                                    other => {
+                                        if let Some(ref keys) = session_keys {
+                                            if let Ok(serialized) = serde_json::to_string(&other) {
+                                                match encrypt_message(keys, &serialized).await {
+                                                    Ok((ciphertext, nonce)) => {
+                                                        send_message(&mut stream, &Message::EncryptedMessage { ciphertext, nonce }).await;
+                                                        log_and_emit(&window, role, "UI_PAYLOAD_ENCRYPTED", "Generic message sent encrypted").await;
+                                                    }
+                                                    Err(e) => {
+                                                        log_and_emit(&window, role, "ENCRYPT_FAIL", &format!("Generic: {}", e)).await;
+                                                        window.emit("ERROR", format!("Encrypt error: {}", e)).ok();
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            window.emit("ERROR", "Cannot send: session not ready").ok();
                                         }
                                     }
                                 }
+                            } else {
+                                if let Some(ref keys) = session_keys {
+                                    let serialized = serde_json::to_string(&Message::PlaintextMessage(message.clone())).unwrap();
+                                    match encrypt_message(keys, &serialized).await {
+                                        Ok((ciphertext, nonce)) => {
+                                            send_message(&mut stream, &Message::EncryptedMessage { ciphertext, nonce }).await;
+                                            log_and_emit(&window, role, "UI_PAYLOAD_ENCRYPTED", "Raw string sent encrypted").await;
+                                        }
+                                        Err(e) => {
+                                            log_and_emit(&window, role, "PLAINTEXT_ENCRYPT_FAIL", &format!("{}", e)).await;
+                                            window.emit("ERROR", format!("Encrypt error: {}", e)).ok();
+                                        }
+                                    }
+                                } else {
+                                    window.emit("ERROR", "Cannot send: session not ready").ok();
+                                }
                             }
                         }
+
                         _ => {
-                            window.emit("ERROR", "Cannot send message: connection is not encrypted").ok();
-                        }
-                    }
-                }
-            }
-
-            result = confirmation_rx.recv() => {
-                match result {
-                    Ok(true) => {
-                        if !local_confirmed {
-                            local_confirmed = true;
-                            log_and_emit(&window, role, "USER_CONFIRMATION", "User confirmed pairing").await;
-                            send_message(&mut stream, &Message::PairingConfirmed).await;
-
-                            if peer_confirmed && is_initiator {
-                                log_and_emit(&window, role, "POST_PAIRING_SESSION_REQUEST", "Requesting session keys after both confirmed").await;
-                                let (session_priv, my_session_pub) = crate::services::pairing::perform_dh_exchange();
-                                temp_dh_private_key = Some(session_priv);
-                                send_message(&mut stream, &Message::SessionKeyRequest(my_session_pub.to_sec1_bytes().into_vec())).await;
-
-                                connection_state = ConnectionState::Authenticating;
-                                update_shared_connection_state(&window, Some(connection_state.clone())).await;
+                            if let Ok(Message::Disconnect { reason }) = serde_json::from_str::<Message>(&message) {
+                                send_message(&mut stream, &Message::Disconnect { reason }).await;
+                            } else {
+                                window.emit("ERROR", "Cannot send message: connection is not encrypted").ok();
                             }
-                        } else {
-                            log_and_emit(&window, role, "CONFIRMATION_IGNORED", "Duplicate local confirmation ignored").await;
                         }
                     }
-                    Ok(false) => { log_and_emit(&window, role, "CONFIRMATION_CANCELLED", "User cancelled pairing").await; }
-                    Err(_) => { log_and_emit(&window, role, "CONFIRMATION_ERROR", "Confirmation channel error").await; }
                 }
             }
+        }
+
+        while let Ok(confirmed) = confirmation_rx.try_recv() {
+            if confirmed && !local_confirmed {
+                local_confirmed = true;
+                log_and_emit(&window, role, "USER_CONFIRMATION", "User confirmed pairing").await;
+
+                if peer_confirmed && is_initiator {
+                    log_and_emit(&window, role, "POST_PAIRING_SESSION_REQUEST", "Requesting session keys after both confirmed").await;
+                    let (session_priv, my_session_pub) = crate::services::pairing::perform_dh_exchange();
+                    temp_dh_private_key = Some(session_priv);
+                    send_message(&mut stream, &Message::SessionKeyRequest(my_session_pub.to_sec1_bytes().into_vec())).await;
+
+                    connection_state = ConnectionState::Authenticating;
+                    update_shared_connection_state(&window, Some(connection_state.clone())).await;
+                }
+            } else {
+                log_and_emit(&window, role, "CONFIRMATION_IGNORED", "Duplicate local confirmation ignored").await;
+            }
+        }
+
+        if last_activity.elapsed().as_secs() > 300 {
+            log_and_emit(&window, role, "CONNECTION_TIMEOUT", "Connection timed out due to inactivity").await;
+            break;
         }
     }
 
@@ -434,6 +489,7 @@ pub async fn handle_connection(
         *guard = None;
     }
     log_and_emit(&window, role, "CONNECTION_ENDED", "Connection loop ended, cleaning up").await;
+    clear_shared_connection_state(&window).await;
 }
 
 async fn handle_decrypted(window: &Window, plaintext: String) {
@@ -458,50 +514,41 @@ async fn handle_decrypted(window: &Window, plaintext: String) {
         }
     }
 
-    if let Ok(v) = serde_json::from_str::<Value>(&plaintext) {
-        let title   = v.get("title").and_then(|x| x.as_str()).unwrap_or("Unknown Redemption");
-        let content = v.get("content").and_then(|x| x.as_str()).unwrap_or("");
-        let time    = v.get("time").and_then(|x| x.as_u64())
-                     .or_else(|| v.get("timerDuration").and_then(|x| x.as_u64()));
-        let audio_b64 = v.get("audioData").and_then(|x| x.as_str())
-                      .or_else(|| v.get("audio_base64").and_then(|x| x.as_str()))
-                      .or_else(|| v.get("audioBase64").and_then(|x| x.as_str()));
-        if let Some(b64) = audio_b64 {
-            let payload = json!({
-                "id": format!("redemption_{}", Utc::now().timestamp_millis()),
-                "title": title,
-                "content": content,
-                "timerDuration": time,
-                "audioData": b64
-            });
-            let _ = window.emit("REDEMPTION_RECEIVED", payload);
+    let v: Value = match serde_json::from_str(&plaintext) {
+        Ok(v) => v,
+        Err(_) => {
+            let _ = window.emit("PLAINTEXT", plaintext);
             return;
         }
-    }
-
-    let _ = window.emit("INCOMING_MESSAGE", plaintext);
+    };
+    let _ = window.emit("PLAINTEXT", v);
 }
 
 async fn encrypt_message(keys: &SessionKeys, plaintext: &str) -> Result<(Vec<u8>, [u8; 12]), String> {
+    // seq
     let seq = {
-        let mut ctr = keys.send_nonce.lock().await;
-        let cur = *ctr; *ctr = cur.wrapping_add(1); cur
+        let mut s = keys.send_nonce.lock().await;
+        let v = *s;
+        *s = v + 1;
+        v
     };
-
     let mut nonce = [0u8; 12];
     nonce[..4].copy_from_slice(&keys.nonce_prefix_send);
     nonce[4..].copy_from_slice(&seq.to_be_bytes());
-    let aead_nonce = aead::Nonce::assume_unique_for_key(nonce);
 
+    // AAD
     let mut aad = Vec::with_capacity(11 + 16 + 8);
     aad.extend_from_slice(b"vocalix v2");
     aad.extend_from_slice(&keys.session_id);
     aad.extend_from_slice(&seq.to_be_bytes());
 
+    let aead_nonce = aead::Nonce::assume_unique_for_key(nonce);
     let mut in_out = plaintext.as_bytes().to_vec();
-    keys.encryption_key
-        .seal_in_place_append_tag(aead_nonce, aead::Aad::from(&aad), &mut in_out)
+    let tag = keys
+        .encryption_key
+        .seal_in_place_separate_tag(aead_nonce, aead::Aad::from(&aad), &mut in_out)
         .map_err(|_| "Encryption failed".to_string())?;
+    in_out.extend_from_slice(tag.as_ref());
     Ok((in_out, nonce))
 }
 
