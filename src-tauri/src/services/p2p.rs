@@ -88,6 +88,14 @@ pub async fn handle_connection(
 
     let mut last_activity = std::time::Instant::now();
 
+    log_and_emit(
+        &window,
+        role,
+        "CONNECTION_LOOP_START",
+        "Starting main connection loop - ready to receive confirmations"
+    ).await;
+    println!("[CONNECTION_LOOP] Starting main loop for {}", role);
+
     loop {
         tokio::select! {
                             result = read_framed(&mut stream) => {
@@ -275,14 +283,25 @@ pub async fn handle_connection(
                                             peer_confirmed = true;
                                             log_and_emit(&window, role, "PEER_CONFIRMED", "Peer has confirmed pairing").await;
 
-                                            if local_confirmed && is_initiator {
-                                                log_and_emit(&window, role, "POST_PAIRING_SESSION_REQUEST", "Requesting session keys after both confirmed").await;
-                                                let (session_priv, my_session_pub) = crate::services::pairing::perform_dh_exchange();
-                                                temp_dh_private_key = Some(session_priv);
-                                                send_message(&mut stream, &Message::SessionKeyRequest(my_session_pub.to_sec1_bytes().into_vec())).await;
+                                            if local_confirmed {
+                                                log_and_emit(&window, role, "BOTH_CONFIRMED", "Both peers confirmed pairing").await;
+                                                window.emit("STATUS_UPDATE", "Both peers confirmed pairing - establishing session...").ok();
+                                                
+                                                if is_initiator {
+                                                    log_and_emit(&window, role, "POST_PAIRING_SESSION_REQUEST", "Requesting session keys after both confirmed").await;
+                                                    let (session_priv, my_session_pub) = crate::services::pairing::perform_dh_exchange();
+                                                    temp_dh_private_key = Some(session_priv);
+                                                    send_message(&mut stream, &Message::SessionKeyRequest(my_session_pub.to_sec1_bytes().into_vec())).await;
 
-                                                connection_state = ConnectionState::Authenticating;
-                                                update_shared_connection_state(&window, Some(connection_state.clone())).await;
+                                                    connection_state = ConnectionState::Authenticating;
+                                                    update_shared_connection_state(&window, Some(connection_state.clone())).await;
+                                                } else {
+                                                    log_and_emit(&window, role, "LISTENER_READY", "Listener ready for session key exchange").await;
+                                                    connection_state = ConnectionState::Authenticating;
+                                                    update_shared_connection_state(&window, Some(connection_state.clone())).await;
+                                                }
+                                            } else {
+                                                log_and_emit(&window, role, "PEER_CONFIRMED_WAITING_LOCAL", "Peer confirmed, waiting for local confirmation").await;
                                             }
                                         } else {
                                             log_and_emit(&window, role, "PEER_CONFIRMATION_IGNORED", "Duplicate peer confirmation ignored").await;
@@ -293,6 +312,7 @@ pub async fn handle_connection(
                                     | (ConnectionState::WaitingForUserConfirmation, Message::SessionKeyRequest(session_pub_key))
                                     | (ConnectionState::WaitingForPeerConfirmation, Message::SessionKeyRequest(session_pub_key)) => {
                                         log_and_emit(&window, role, "SESSION_KEY_REQUEST_RECEIVED", "Creating session keys from ephemeral DH").await;
+                                        window.emit("STATUS_UPDATE", "Creating secure session keys...").ok();
                                         let (session_priv, my_session_pub) = crate::services::pairing::perform_dh_exchange();
                                         match crate::services::pairing::create_session_keys(&session_priv, session_pub_key) {
                                             Ok((enc, dec, np_send, np_recv, session_id, kc_send, kc_recv)) => {
@@ -312,7 +332,7 @@ pub async fn handle_connection(
                                                 if let Some(ref keys) = session_keys {
                                                     send_message(&mut stream, &Message::KeyConfirm(keys.confirm_send_tag.to_vec())).await;
                                                     log_and_emit(&window, role, "KEY_CONFIRM_SENT", "Sent key confirmation tag").await;
-                                                    window.emit("SUCCESS", "Session keys established. Awaiting key confirmation...").ok();
+                                                    window.emit("STATUS_UPDATE", "Session keys established. Awaiting key confirmation...").ok();
                                                 }
 
                                                 connection_state = ConnectionState::WaitingForPeerConfirmation;
@@ -329,6 +349,8 @@ pub async fn handle_connection(
                                     (ConnectionState::Authenticating, Message::SessionKeyResponse(session_pub_key))
                                     | (ConnectionState::WaitingForUserConfirmation, Message::SessionKeyResponse(session_pub_key))
                                     | (ConnectionState::WaitingForPeerConfirmation, Message::SessionKeyResponse(session_pub_key)) => {
+                                        log_and_emit(&window, role, "SESSION_KEY_RESPONSE_RECEIVED", "Processing session key response").await;
+                                        window.emit("STATUS_UPDATE", "Processing session key response...").ok();
                                         if let Some(session_priv) = temp_dh_private_key.take() {
                                             match crate::services::pairing::create_session_keys(&session_priv, session_pub_key) {
                                                 Ok((enc, dec, np_send, np_recv, session_id, kc_send, kc_recv)) => {
@@ -347,6 +369,7 @@ pub async fn handle_connection(
                                                     if let Some(ref keys) = session_keys {
                                                         send_message(&mut stream, &Message::KeyConfirm(keys.confirm_send_tag.to_vec())).await;
                                                         log_and_emit(&window, role, "KEY_CONFIRM_SENT", "Sent key confirmation tag").await;
+                                                        window.emit("STATUS_UPDATE", "Session keys created. Awaiting final confirmation...").ok();
                                                     }
 
                                                     connection_state = ConnectionState::WaitingForPeerConfirmation;
@@ -358,6 +381,10 @@ pub async fn handle_connection(
                                                     break;
                                                 }
                                             }
+                                        } else {
+                                            log_and_emit(&window, role, "SESSION_KEY_ERROR", "No temporary DH private key available").await;
+                                            window.emit("ERROR", "Protocol error: missing DH private key").ok();
+                                            break;
                                         }
                                     }
 
@@ -386,6 +413,7 @@ pub async fn handle_connection(
                                                 connection_state = ConnectionState::Encrypted;
                                                 update_shared_connection_state(&window, Some(connection_state.clone())).await;
                                                 window.emit("SUCCESS", "Secure encrypted channel established!").ok();
+                                                window.emit("CLIENT_CONNECTED", ()).ok();
                                             } else {
                                                 log_and_emit(&window, role, "KEY_CONFIRM_FAIL", "Confirmation tag mismatch").await;
                                                 window.emit("ERROR", "Key confirmation failed").ok();
@@ -422,6 +450,67 @@ pub async fn handle_connection(
 
                                     (_, _) => {
                                         log_and_emit(&window, role, "IGNORED", &format!("State {:?} ignored message", connection_state)).await;
+                                    }
+                                }
+                            }
+
+                            confirmed = confirmation_rx.recv() => {
+                                match confirmed {
+                                    Ok(confirmation_value) => {
+                                        log_and_emit(&window, role, "CONFIRMATION_RX_RECEIVED", &format!("Received confirmation from broadcast: {}", confirmation_value)).await;
+                                        println!("[CONFIRMATION_RX] Received confirmation: {}", confirmation_value);
+                                        if confirmation_value && !local_confirmed {
+                                            local_confirmed = true;
+                                            log_and_emit(&window, role, "USER_CONFIRMATION", "User confirmed pairing").await;
+
+                                            if !confirm_sent {
+                                                send_message(&mut stream, &Message::PairingConfirmed).await;
+                                                confirm_sent = true;
+                                                confirm_retry_deadline = Some(
+                                                    std::time::Instant::now() + std::time::Duration::from_secs(5)
+                                                );
+                                            }
+
+                                            if peer_confirmed {
+                                                log_and_emit(&window, role, "BOTH_CONFIRMED_LOCAL", "Both peers confirmed pairing (from local confirmation)").await;
+                                                window.emit("STATUS_UPDATE", "Both peers confirmed pairing - establishing session...").ok();
+                                                
+                                                if is_initiator {
+                                                    log_and_emit(
+                                                        &window,
+                                                        role,
+                                                        "POST_PAIRING_SESSION_REQUEST",
+                                                        "Requesting session keys after both confirmed"
+                                                    ).await;
+                                                    let (session_priv, my_session_pub) =
+                                                        crate::services::pairing::perform_dh_exchange();
+                                                    temp_dh_private_key = Some(session_priv);
+                                                    send_message(
+                                                        &mut stream,
+                                                        &Message::SessionKeyRequest(my_session_pub.to_sec1_bytes().into_vec())
+                                                    ).await;
+
+                                                    connection_state = ConnectionState::Authenticating;
+                                                    update_shared_connection_state(&window, Some(connection_state.clone())).await;
+                                                } else {
+                                                    log_and_emit(&window, role, "LISTENER_READY_LOCAL", "Listener ready for session key exchange (from local confirmation)").await;
+                                                    connection_state = ConnectionState::Authenticating;
+                                                    update_shared_connection_state(&window, Some(connection_state.clone())).await;
+                                                }
+                                            } else {
+                                                log_and_emit(&window, role, "LOCAL_CONFIRMED_WAITING_PEER", "Local confirmed, waiting for peer confirmation").await;
+                                            }
+                                        } else {
+                                            log_and_emit(
+                                                &window,
+                                                role,
+                                                "CONFIRMATION_IGNORED",
+                                                "Duplicate local confirmation ignored"
+                                            ).await;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        log_and_emit(&window, role, "CONFIRMATION_RX_ERROR", &format!("Confirmation receiver error: {}", e)).await;
                                     }
                                 }
                             }
@@ -509,47 +598,6 @@ pub async fn handle_connection(
             }
         }
 
-        while let Ok(confirmed) = confirmation_rx.try_recv() {
-            if confirmed && !local_confirmed {
-                local_confirmed = true;
-                log_and_emit(&window, role, "USER_CONFIRMATION", "User confirmed pairing").await;
-
-                if !confirm_sent {
-                    send_message(&mut stream, &Message::PairingConfirmed).await;
-                    confirm_sent = true;
-                    confirm_retry_deadline = Some(
-                        std::time::Instant::now() + std::time::Duration::from_secs(5)
-                    );
-                }
-
-                if peer_confirmed && is_initiator {
-                    log_and_emit(
-                        &window,
-                        role,
-                        "POST_PAIRING_SESSION_REQUEST",
-                        "Requesting session keys after both confirmed"
-                    ).await;
-                    let (session_priv, my_session_pub) =
-                        crate::services::pairing::perform_dh_exchange();
-                    temp_dh_private_key = Some(session_priv);
-                    send_message(
-                        &mut stream,
-                        &Message::SessionKeyRequest(my_session_pub.to_sec1_bytes().into_vec())
-                    ).await;
-
-                    connection_state = ConnectionState::Authenticating;
-                    update_shared_connection_state(&window, Some(connection_state.clone())).await;
-                }
-            } else {
-                log_and_emit(
-                    &window,
-                    role,
-                    "CONFIRMATION_IGNORED",
-                    "Duplicate local confirmation ignored"
-                ).await;
-            }
-        }
-
         if last_activity.elapsed().as_secs() > 300 {
             log_and_emit(
                 &window,
@@ -613,7 +661,6 @@ async fn encrypt_message(
     keys: &SessionKeys,
     plaintext: &str
 ) -> Result<(Vec<u8>, [u8; 12]), String> {
-    // seq
     let seq = {
         let mut s = keys.send_nonce.lock().await;
         let v = *s;
@@ -624,7 +671,6 @@ async fn encrypt_message(
     nonce[..4].copy_from_slice(&keys.nonce_prefix_send);
     nonce[4..].copy_from_slice(&seq.to_be_bytes());
 
-    // AAD
     let mut aad = Vec::with_capacity(11 + 16 + 8);
     aad.extend_from_slice(b"vocalix v2");
     aad.extend_from_slice(&keys.session_id);

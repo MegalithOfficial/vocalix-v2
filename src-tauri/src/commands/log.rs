@@ -9,7 +9,7 @@ pub async fn write_log(
     level: String,
     component: String,
     message: String,
-    _timestamp: String, // Frontend timestamp, we use our own
+    _timestamp: String,
     logging_state: State<'_, LoggingState>,
 ) -> Result<(), String> {
     log_info!("LogCommand", "Frontend requested log write: [{}] [{}] {}", level, component, message);
@@ -69,7 +69,6 @@ pub async fn write_log(
 pub async fn get_logs(logging_state: State<'_, LoggingState>) -> Result<Vec<serde_json::Value>, String> {
     log_debug!("LogCommand", "Getting logs from buffer and file");
     
-    // First try to get from memory buffer (more recent logs)
     let buffer_logs = get_logs_from_buffer();
     if !buffer_logs.is_empty() {
         log_info!("LogCommand", "Returning {} logs from memory buffer", buffer_logs.len());
@@ -86,7 +85,6 @@ pub async fn get_logs(logging_state: State<'_, LoggingState>) -> Result<Vec<serd
         return Ok(serialized_logs);
     }
 
-    // Fallback to file-based logs
     let log_file_path = logging_state
         .log_file_path
         .lock()
@@ -124,10 +122,8 @@ pub async fn get_logs(logging_state: State<'_, LoggingState>) -> Result<Vec<serd
 pub async fn clear_logs(logging_state: State<'_, LoggingState>) -> Result<(), String> {
     log_info!("LogCommand", "Clearing logs (both buffer and file)");
     
-    // Clear memory buffer
     clear_logs_buffer();
     
-    // Clear file
     let log_file_path = logging_state
         .log_file_path
         .lock()
@@ -146,7 +142,6 @@ pub async fn clear_logs(logging_state: State<'_, LoggingState>) -> Result<(), St
 }
 
 fn parse_log_line(line: &str) -> Option<serde_json::Value> {
-    // Parse format: [timestamp] [LEVEL] [component] message
     if line.len() < 10 || !line.starts_with('[') {
         return None;
     }

@@ -1,133 +1,156 @@
 import { motion } from 'framer-motion';
 import { useState, useEffect, useRef } from 'react';
-import { ArrowLeft, Wifi, WifiOff, Pause, Clock, MessageSquare, AlertCircle, RefreshCw, ChevronDown, ChevronUp, List } from 'lucide-react';
+import { ArrowLeft, Wifi, WifiOff, Pause, Clock, MessageSquare, AlertCircle, RefreshCw, ChevronDown, ChevronUp, List, AlertTriangle, Server } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
 type ConnectingHeroProps = {
-  visible: boolean;
-  address?: string;
-  attempt?: number;
-  nextRetrySec?: number | null;
-  lastError?: string | null;
-  connecting: boolean;             // isConnecting || connectInProgressRef.current
-  paused: boolean;                 // !autoLoopActiveRef.current
-  onPause: () => void;             // stopAutoReconnectLoop('user_pause')
-  onResume: () => void;            // startAutoReconnectLoop()
-  onDisable: () => void;           // handleToggleAutoConnect()
-  onChangeServer: () => void;      // handleManualOverride()
-  onRetryNow?: () => void;         // (opsiyonel) scheduleNextAutoRun(0) gibi
+   visible: boolean;
+   address?: string;
+   attempt?: number;
+   nextRetrySec?: number | null;
+   lastError?: string | null;
+   connecting: boolean;
+   paused: boolean;
+   onPause: () => void;
+   onResume: () => void;
+   onDisable: () => void;
+   onChangeServer: () => void;
+   onRetryNow?: () => void;
 };
 
 export const ConnectingHero: React.FC<ConnectingHeroProps> = ({
-  visible,
-  address,
-  attempt = 1,
-  nextRetrySec = null,
-  lastError = null,
-  connecting,
-  paused,
-  onPause,
-  onResume,
-  onDisable,
-  onChangeServer,
-  onRetryNow,
+   visible,
+   address,
+   attempt = 1,
+   nextRetrySec = null,
+   lastError = null,
+   connecting,
+   paused,
+   onPause,
+   onResume,
+   onDisable,
+   onChangeServer,
+   onRetryNow,
 }) => {
-  if (!visible) return null;
+   if (!visible) return null;
 
-  const title = paused
-    ? 'Auto-connect paused'
-    : 'Connecting to the server';
+   const StatusIcon = paused ? Pause : RefreshCw;
+   const statusColor =
+      paused ? "bg-amber-500/10 text-amber-300 border-amber-400/30" : "bg-blue-500/10 text-blue-300 border-blue-400/30";
+   const statusLabel = paused ? "Auto-connect paused" : "Connecting to the server";
+   const subtitle = paused
+      ? "You can resume the loop anytime."
+      : "Establishing a secure channel. This may take a moment.";
 
-  const subtitle = paused
-    ? 'You can resume the loop anytime.'
-    : 'Establishing a secure channel. This may take a moment.';
+   return (
+      <motion.div
+         initial={{ opacity: 0, y: 8 }}
+         animate={{ opacity: 1, y: 0 }}
+         exit={{ opacity: 0, y: 8 }}
+         className="relative mx-auto w-full max-w-3xl rounded-2xl border border-white/10 bg-slate-950/70 ring-1 ring-black/30 backdrop-blur px-6 py-6 md:px-8 md:py-8"
+      >
+         {/* Header: status badge + server chip + attempt */}
+         <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-sm ${statusColor}`}>
+               <StatusIcon className="h-3.5 w-3.5" />
+               <span className="font-medium">{statusLabel}</span>
+            </div>
 
-  return (
-    <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-slate-950/70 ring-1 ring-white/10 px-8 py-10">
-      <div className="relative flex flex-col items-center text-center gap-3">
-        <div className="relative h-14 w-14">
-          <div className="absolute inset-0 rounded-full border-2 border-blue-400/30" />
-          {connecting && (
-            <div className="absolute inset-0 rounded-full border-2 border-blue-400 border-t-transparent animate-spin" />
-          )}
-          {paused && (
-            <div className="absolute inset-0 rounded-full border-2 border-amber-400/60" />
-          )}
-        </div>
+            <div className="flex flex-wrap items-center gap-2">
+               {address && (
+                  <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-slate-900/70 px-3 py-1 text-xs text-slate-300">
+                     <Server className="h-3.5 w-3.5" />
+                     <span className="font-mono">{address}</span>
+                  </span>
+               )}
+               <span className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-slate-900/70 px-2.5 py-1 text-xs text-slate-300">
+                  <Wifi className="h-3.5 w-3.5" />
+                  Attempt: <b className="text-white">{attempt}</b>
+               </span>
+               {typeof nextRetrySec === "number" && nextRetrySec >= 0 && (
+                  <span className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-slate-900/70 px-2.5 py-1 text-xs text-slate-300">
+                     <Clock className="h-3.5 w-3.5" />
+                     Next retry in <b className="text-white">{nextRetrySec}s</b>
+                  </span>
+               )}
+            </div>
+         </div>
 
-        <h2 className="text-2xl md:text-3xl font-semibold tracking-tight text-white">
-          {title}
-        </h2>
-        <p className="text-base md:text-lg text-slate-300">{subtitle}</p>
+         {/* Body: icon ring + title + subtitle */}
+         <div className="mt-6 flex flex-col items-center text-center">
+            <div className="relative h-14 w-14">
+               <div className="absolute inset-0 rounded-full border-2 border-white/10" />
+               {connecting && (
+                  <div className="absolute inset-0 rounded-full border-2 border-blue-400/70 border-t-transparent animate-spin" />
+               )}
+               {paused && <div className="absolute inset-0 rounded-full border-2 border-amber-400/70" />}
+            </div>
 
-        {address && (
-          <div className="mt-1 inline-flex items-center gap-2 rounded-xl bg-slate-800/70 px-3 py-1.5 ring-1 ring-slate-700/60">
-            <span className="text-sm text-slate-400">Server</span>
-            <code className="font-mono text-sm text-slate-100">{address}</code>
-          </div>
-        )}
-      </div>
+            <h2 className="mt-4 text-2xl md:text-3xl font-semibold tracking-tight text-white">{statusLabel}</h2>
+            <p className="mt-1 text-slate-300">{subtitle}</p>
+         </div>
 
-      <div className="relative mt-8 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-sm text-slate-300">
-        <span>
-          Attempt: <span className="font-medium text-white">{attempt}</span>
-        </span>
-        {nextRetrySec != null && (
-          <span>
-            Next retry in <span className="font-medium text-white">{nextRetrySec}s</span>
-          </span>
-        )}
-        {lastError && (
-          <span className="text-red-300">
-            Last error: <span className="font-medium">{lastError}</span>
-          </span>
-        )}
-      </div>
+         {/* Actions */}
+         <div className="mt-7 flex flex-wrap items-center justify-center gap-3">
+            {paused ? (
+               <button
+                  onClick={onResume}
+                  className="inline-flex items-center justify-center rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-500 transition-colors"
+               >
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Resume
+               </button>
+            ) : (
+               <button
+                  onClick={onPause}
+                  className="inline-flex items-center justify-center rounded-xl bg-slate-800 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-700 transition-colors"
+               >
+                  <WifiOff className="mr-2 h-4 w-4" />
+                  Pause
+               </button>
+            )}
 
-      <div className="relative mt-6 flex flex-wrap items-center justify-center gap-3">
-        {paused ? (
-          <button
-            onClick={onResume}
-            className="rounded-lg bg-blue-500 px-4 py-2 text-white font-semibold hover:bg-blue-400"
-          >
-            Resume
-          </button>
-        ) : (
-          <button
-            onClick={onPause}
-            className="rounded-lg bg-slate-800/70 ring-1 ring-slate-600/60 px-4 py-2 text-slate-100 hover:bg-slate-800"
-          >
-            Pause
-          </button>
-        )}
+            <button
+               onClick={onChangeServer}
+               className="inline-flex items-center justify-center rounded-xl bg-slate-900/60 px-4 py-2.5 text-sm font-medium text-slate-200 hover:bg-slate-800/70 border border-white/10 transition-colors"
+            >
+               Change server…
+            </button>
 
-        <button
-          onClick={onChangeServer}
-          className="rounded-lg bg-white text-slate-900 font-semibold px-4 py-2 hover:bg-slate-100"
-        >
-          Change server…
-        </button>
+            <button
+               onClick={onDisable}
+               className="inline-flex items-center justify-center rounded-xl bg-transparent px-4 py-2.5 text-sm font-medium text-slate-300 hover:text-white border border-white/10 hover:border-white/20 transition-colors"
+            >
+               Disable auto-connect
+            </button>
 
-        <button
-          onClick={onDisable}
-          className="rounded-lg bg-slate-800/70 ring-1 ring-slate-600/60 px-4 py-2 text-slate-100 hover:bg-slate-800"
-        >
-          Disable auto-connect
-        </button>
+            {!paused && onRetryNow && (
+               <button
+                  onClick={onRetryNow}
+                  className="inline-flex items-center justify-center rounded-xl bg-slate-900/60 px-3.5 py-2 text-xs font-medium text-slate-200 hover:bg-slate-800/70 border border-white/10 transition-colors"
+                  title="Retry now"
+               >
+                  <RefreshCw className="h-4 w-4" />
+               </button>
+            )}
+         </div>
 
-        {onRetryNow && !paused && (
-          <button
-            onClick={onRetryNow}
-            className="rounded-lg px-4 py-2 text-slate-200 underline underline-offset-4 hover:text-white"
-          >
-            Retry now
-          </button>
-        )}
-      </div>
-    </div>
-  );
+         {/* Error details (collapsible inline) */}
+         {lastError && (
+            <div className="mt-6 rounded-xl border border-red-500/30 bg-red-500/5 p-4">
+               <div className="flex items-start gap-3">
+                  <AlertTriangle className="mt-0.5 h-5 w-5 text-red-400" />
+                  <div className="text-left">
+                     <p className="text-sm font-semibold text-red-300">Connection error</p>
+                     <p className="mt-1 text-sm text-red-200/90 break-words">{lastError}</p>
+                  </div>
+               </div>
+            </div>
+         )}
+      </motion.div>
+   );
 };
 
 
@@ -185,7 +208,7 @@ const ClientPage = () => {
    const [currentAudio, setCurrentAudio] = useState<HTMLAudioElement | null>(null);
    const [audioSrc, setAudioSrc] = useState<string | null>(null);
 
-   const [showLog, setShowLog] = useState(false); 
+   const [showLog, setShowLog] = useState(false);
    const [autoScrollLog, setAutoScrollLog] = useState(true);
    const logContainerRef = useRef<HTMLDivElement>(null);
 
@@ -393,9 +416,12 @@ const ClientPage = () => {
             message.includes('Known peer found') ||
             message.includes('Challenge received') ||
             message.includes('Authentication') ||
-            message.toLowerCase().includes('both peers confirmed')
+            message.toLowerCase().includes('both peers confirmed') ||
+            message.includes('establishing session')
          ) {
             setConnectionState('pairing');
+         } else if (message.includes('Secure encrypted channel established')) {
+            setConnectionState('connected');
          }
       });
 
@@ -448,7 +474,7 @@ const ClientPage = () => {
                if (isMountedRef.current && autoConnectEnabled && !manualOverride) {
                   startAutoReconnectLoop();
                }
-            }, 1000); 
+            }, 1000);
          }
       });
 
@@ -469,7 +495,7 @@ const ClientPage = () => {
                if (isMountedRef.current && autoConnectEnabled && !manualOverride) {
                   startAutoReconnectLoop();
                }
-            }, 2000); 
+            }, 2000);
          }
       });
 
@@ -525,9 +551,9 @@ const ClientPage = () => {
             const clean = redemption.audioData.includes(',') ? redemption.audioData.split(',')[1] : redemption.audioData;
             let mime: string = parsedData.mimeType || 'audio/mpeg';
             if (!parsedData.mimeType && clean) {
-               if (clean.startsWith('UklG')) mime = 'audio/wav';    
-               else if (clean.startsWith('SUQz')) mime = 'audio/mpeg'; 
-               else if (clean.startsWith('T2dn')) mime = 'audio/ogg';  
+               if (clean.startsWith('UklG')) mime = 'audio/wav';
+               else if (clean.startsWith('SUQz')) mime = 'audio/mpeg';
+               else if (clean.startsWith('T2dn')) mime = 'audio/ogg';
             }
             await playAudio(redemption.audioData, mime);
          } else if (redemption.filePath) {
@@ -610,7 +636,7 @@ const ClientPage = () => {
       try {
          await invoke('start_initiator', { address: target });
       } catch (error) {
-         if (!isMountedRef.current) return; 
+         if (!isMountedRef.current) return;
 
          console.error('Failed to start connection:', error);
          const errMsg = typeof error === 'string' ? error : (error as any)?.toString?.() || 'Unknown error';
@@ -631,7 +657,7 @@ const ClientPage = () => {
       try {
          await invoke('user_confirm_pairing');
          setConnectionState('pairing');
-         addLog('info', 'Pairing confirmed locally. Waiting for the other side to confirm...');
+         addLog('info', 'Pairing confirmed locally. Waiting for the other side to confirm and establish session...');
       } catch (error) {
          console.error('Failed to confirm pairing:', error);
          setError(`Failed to confirm pairing: ${error}`);
@@ -709,7 +735,7 @@ const ClientPage = () => {
 
       if (connectInProgressRef.current || isConnecting) {
          console.log('Connection attempt already in progress, skipping auto attempt');
-         scheduleNextAutoRun(); 
+         scheduleNextAutoRun();
          return;
       }
 
@@ -746,7 +772,7 @@ const ClientPage = () => {
                scheduleNextAutoRun();
             }
          }
-      }, 15000); 
+      }, 15000);
    };
 
    const scheduleNextAutoRun = () => {
@@ -761,10 +787,10 @@ const ClientPage = () => {
       }
 
       const attempt = autoConnectAttemptsRef.current;
-      const base = 5000; 
-      const maxDelay = 60000; 
+      const base = 5000;
+      const maxDelay = 60000;
       const exponentialDelay = Math.min(base * Math.pow(2, Math.max(0, attempt - 1)), maxDelay);
-      const jitter = Math.floor(Math.random() * 1000); 
+      const jitter = Math.floor(Math.random() * 1000);
       const finalDelay = exponentialDelay + jitter;
 
       setNextRetryDelayMs(finalDelay);
@@ -968,8 +994,8 @@ const ClientPage = () => {
                                        key={addr}
                                        onClick={() => setServerAddress(addr)}
                                        className={`px-2.5 py-1 rounded-full text-xs border transition-colors ${addr === serverAddress
-                                             ? 'bg-blue-500/30 border-blue-400/40 text-blue-300'
-                                             : 'bg-gray-700/40 border-gray-600/40 text-gray-300 hover:bg-gray-700/60'
+                                          ? 'bg-blue-500/30 border-blue-400/40 text-blue-300'
+                                          : 'bg-gray-700/40 border-gray-600/40 text-gray-300 hover:bg-gray-700/60'
                                           }`}
                                     >
                                        {idx === 0 ? 'Last: ' : ''}{addr}
@@ -990,8 +1016,8 @@ const ClientPage = () => {
                               </div>
                               <div className="flex items-center gap-3">
                                  <div className={`px-3 py-1.5 rounded-full text-xs font-medium border ${autoConnectEnabled
-                                       ? 'bg-green-500/20 text-green-400 border-green-500/30'
-                                       : 'bg-gray-500/20 text-gray-400 border-gray-500/30'
+                                    ? 'bg-green-500/20 text-green-400 border-green-500/30'
+                                    : 'bg-gray-500/20 text-gray-400 border-gray-500/30'
                                     }`}>
                                     {autoConnectEnabled ? 'Enabled' : 'Disabled'}
                                  </div>
@@ -1000,8 +1026,8 @@ const ClientPage = () => {
                                     whileTap={{ scale: 0.95 }}
                                     onClick={handleToggleAutoConnect}
                                     className={`relative w-14 h-7 rounded-full transition-all duration-300 shadow-inner ${autoConnectEnabled
-                                          ? 'bg-gradient-to-r from-blue-500 to-blue-600 shadow-blue-500/25'
-                                          : 'bg-gradient-to-r from-gray-600 to-gray-700 shadow-gray-500/25'
+                                       ? 'bg-gradient-to-r from-blue-500 to-blue-600 shadow-blue-500/25'
+                                       : 'bg-gradient-to-r from-gray-600 to-gray-700 shadow-gray-500/25'
                                        }`}
                                     aria-pressed={autoConnectEnabled}
                                     aria-label="Toggle auto-connect"
@@ -1097,23 +1123,23 @@ const ClientPage = () => {
                )}
 
                {connectionState === 'disconnected' && autoConnectEnabled && !manualOverride && (
-<ConnectingHero
-  visible={connectionState === 'disconnected' && autoConnectEnabled && !manualOverride}
-  connecting={isConnecting || connectInProgressRef.current}
-  paused={!autoLoopActiveRef.current}
-  address={(autoConnectAddress || recentServers[0] || serverAddress) || undefined}
-  attempt={autoConnectAttemptCount || 1}
-  nextRetrySec={nextRetryDelayMs !== null ? Math.round(nextRetryDelayMs / 1000) : null}
-  lastError={lastAutoConnectError}
-  onPause={() => stopAutoReconnectLoop('user_pause')}
-  onResume={() => startAutoReconnectLoop()}
-  onDisable={() => handleToggleAutoConnect()}
-  onChangeServer={handleManualOverride}
-  onRetryNow={() => {
-    // istersen anında bir deneme tetikleyebilirsin:
-    // scheduleNextAutoRun(0);
-  }}
-/>
+                  <ConnectingHero
+                     visible={connectionState === 'disconnected' && autoConnectEnabled && !manualOverride}
+                     connecting={isConnecting || connectInProgressRef.current}
+                     paused={!autoLoopActiveRef.current}
+                     address={(autoConnectAddress || recentServers[0] || serverAddress) || undefined}
+                     attempt={autoConnectAttemptCount || 1}
+                     nextRetrySec={nextRetryDelayMs !== null ? Math.round(nextRetryDelayMs / 1000) : null}
+                     lastError={lastAutoConnectError}
+                     onPause={() => stopAutoReconnectLoop('user_pause')}
+                     onResume={() => startAutoReconnectLoop()}
+                     onDisable={() => handleToggleAutoConnect()}
+                     onChangeServer={handleManualOverride}
+                     onRetryNow={() => {
+                        // istersen anında bir deneme tetikleyebilirsin:
+                        // scheduleNextAutoRun(0);
+                     }}
+                  />
 
                )}
 

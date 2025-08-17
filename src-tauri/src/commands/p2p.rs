@@ -54,13 +54,11 @@ pub async fn start_listener(
     log_info!("P2P", "Successfully bound listener to 0.0.0.0:12345");
     window.emit("STATUS_UPDATE", "Listening on 0.0.0.0:12345").ok();
 
-    // Clone stable handles for the accept loop
     let win = window.clone();
     let app_state = state.inner.clone();
     let confirm_tx = state.confirmation_tx.clone();
     let msg_tx = state.message_tx.clone();
 
-    // Accept loop (keeps listening for new clients)
     tokio::spawn(async move {
         loop {
             match listener.accept().await {
@@ -68,10 +66,8 @@ pub async fn start_listener(
                     log_info!("P2P", "Accepted connection from {}", addr);
                     win.emit("STATUS_UPDATE", format!("Accepted connection from {}", addr)).ok();
 
-                    // Her bağlantı için yeni subscriber
                     let confirmation_rx = confirm_tx.subscribe();
 
-                    // Bağlantı handler'ını spawn et
                     tokio::spawn(handle_connection(
                         stream,
                         win.clone(),
@@ -86,7 +82,6 @@ pub async fn start_listener(
                 Err(e) => {
                     log_error!("P2P", "Failed to accept connection: {}", e);
                     win.emit("ERROR", format!("Accept failed: {}", e)).ok();
-                    // Kısa bekleyip tekrar dene (spin koruması)
                     tokio::time::sleep(Duration::from_millis(300)).await;
                 }
             }
@@ -146,8 +141,21 @@ pub async fn start_initiator(
 
 #[tauri::command]
 pub async fn user_confirm_pairing(state: State<'_, AppStateWithChannel>) -> Result<(), String> {
-    state.confirmation_tx.send(true).map_err(|e| e.to_string())?;
-    Ok(())
+    log_info!("P2P", "User confirmation received from frontend");
+    println!("[USER_CONFIRM] Received user confirmation request");
+    
+    match state.confirmation_tx.send(true) {
+        Ok(_) => {
+            log_info!("P2P", "User confirmation sent to connection handler");
+            println!("[USER_CONFIRM] Successfully sent confirmation to connection handler");
+            Ok(())
+        }
+        Err(e) => {
+            log_error!("P2P", "Failed to send user confirmation: {}", e);
+            println!("[USER_CONFIRM] Failed to send confirmation: {}", e);
+            Err(e.to_string())
+        }
+    }
 }
 
 #[tauri::command]

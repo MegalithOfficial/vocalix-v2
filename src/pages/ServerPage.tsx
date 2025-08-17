@@ -140,7 +140,7 @@ const ServerPage = () => {
         setIsClientConnected(false);
         setPairingCode(null);
         addServerLog('info', 'Client disconnected');
-      } else if (message.includes('Peer confirmed pairing') || message.includes('Both peers confirmed')) {
+      } else if (message.includes('Peer confirmed pairing') || message.includes('Both peers confirmed') || message.includes('establishing session')) {
         addServerLog('success', 'Pairing successful - establishing secure connection...');
       } else if (message.includes('Starting listener')) {
         addServerLog('info', 'Initializing server listener...');
@@ -637,7 +637,7 @@ const ServerPage = () => {
   const handleConfirmPairing = async () => {
     try {
       await invoke('user_confirm_pairing');
-      addServerLog('info', 'Pairing confirmed. Waiting for client to confirm...');
+      addServerLog('info', 'Pairing confirmed. Waiting for client to confirm and establish session...');
     } catch (error) {
       console.error('Failed to confirm pairing:', error);
       addServerLog('error', `Failed to confirm pairing: ${error}`);

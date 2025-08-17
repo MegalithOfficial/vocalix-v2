@@ -29,7 +29,7 @@ fn main() {
 
     log_info!("Application", "Identity and peers loaded successfully");
 
-    let (tx, _rx) = broadcast::channel(1);
+    let (tx, _rx) = broadcast::channel(10);
 
     let app_state = AppStateWithChannel {
         inner: AppState {
