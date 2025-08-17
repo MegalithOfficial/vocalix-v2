@@ -86,8 +86,6 @@ pub async fn handle_connection(
         send_message(&mut stream, &Message::Hello(my_public_key_bytes.clone())).await;
     }
 
-    let mut last_activity = std::time::Instant::now();
-
     log_and_emit(
         &window,
         role,
@@ -100,7 +98,7 @@ pub async fn handle_connection(
         tokio::select! {
                             result = read_framed(&mut stream) => {
                                 let bytes = match result {
-                                    Ok(Some(b)) => { last_activity = std::time::Instant::now(); b },
+                                    Ok(Some(b)) => b,
                                     Ok(None) => {
                                         log_and_emit(&window, role, "CONNECTION_CLOSED", "Peer closed connection").await;
                                         clear_shared_connection_state(&window).await;
@@ -596,16 +594,6 @@ pub async fn handle_connection(
                     confirm_retry_deadline = None;
                 }
             }
-        }
-
-        if last_activity.elapsed().as_secs() > 300 {
-            log_and_emit(
-                &window,
-                role,
-                "CONNECTION_TIMEOUT",
-                "Connection timed out due to inactivity"
-            ).await;
-            break;
         }
     }
 
