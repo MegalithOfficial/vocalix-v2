@@ -1,9 +1,8 @@
 use p256::{ecdh::EphemeralSecret, PublicKey};
-use p256::ecdsa::{SigningKey, Signature, VerifyingKey};
-use p256::ecdsa::signature::{Signer, Verifier};
+use p256::ecdsa::SigningKey;
 
-use rand_core::{OsRng, RngCore};
-use ring::{aead, digest, hkdf};
+use rand_core::OsRng;
+use ring::{aead, digest};
 use serde::{Deserialize, Serialize};
 use ::hkdf::Hkdf;
 use sha2::Sha256;
@@ -118,70 +117,53 @@ fn format_code_8(bytes: &[u8]) -> String {
 }
 
 
-pub fn create_challenge() -> (Vec<u8>, Vec<u8>) {
-    let mut nonce = vec![0u8; 32];
-    OsRng.fill_bytes(&mut nonce);
-    set_last_challenge_nonce(nonce.clone());
-
-    let id = load_or_create_identity().expect("identity");
-    let pubkey = id.verifying_key().to_sec1_bytes().to_vec();
-    (nonce, pubkey)
-}
-
-pub fn create_challenge_signature(
-    state: &AppState,
-    nonce: &Vec<u8>,
-    listener_pub_key: &Vec<u8>,
-) -> Vec<u8> {
-    let sk = state
-        .device_identity
-        .blocking_lock()
-        .as_ref()
-        .expect("device identity not loaded")
-        .clone();
-
+fn build_challenge_msg(listener_pub_key: &[u8], nonce: &[u8]) -> Vec<u8> {
     let mut msg = b"sdl challenge v1".to_vec();
     msg.extend_from_slice(listener_pub_key);
     msg.extend_from_slice(nonce);
-
-    let sig: Signature = sk.sign(&msg);
-    sig.to_der().as_bytes().to_vec()
+    msg
 }
 
-pub fn verify_challenge_signature(
-    peer_device_pubkey: &[u8],
+pub fn create_challenge_local(my_signing_key: &SigningKey) -> (Vec<u8>, Vec<u8>) {
+    use rand_core::{OsRng, RngCore};
+    let mut nonce = vec![0u8; 32];
+    OsRng.fill_bytes(&mut nonce);
+    let listener_pub_key = my_signing_key.verifying_key().to_sec1_bytes().to_vec();
+    (nonce, listener_pub_key)
+}
+
+pub fn verify_challenge_signature_with_nonce(
+    peer_device_pubkey_sec1: &[u8],
     listener_pub_key: &[u8],
-    signature: &[u8],
+    nonce: &[u8],
+    signature_der: &[u8],
 ) -> bool {
-    let Some(nonce) = get_last_challenge_nonce() else { return false; };
+    use p256::ecdsa::{Signature, VerifyingKey};
+    use p256::ecdsa::signature::Verifier;
 
-    let mut msg = b"sdl challenge v1".to_vec();
-    msg.extend_from_slice(listener_pub_key);
-    msg.extend_from_slice(&nonce);
+    let Ok(vk) = VerifyingKey::from_sec1_bytes(peer_device_pubkey_sec1) else { return false; };
 
-    let Ok(vk) = VerifyingKey::from_sec1_bytes(peer_device_pubkey) else { return false; };
-    if let Ok(sig) = Signature::from_der(signature) {
+    let msg = build_challenge_msg(listener_pub_key, nonce);
+    if let Ok(sig) = Signature::from_der(signature_der) {
         return vk.verify(&msg, &sig).is_ok();
     }
-
-    if signature.len() == 64 {
-        if let Ok(sig) = Signature::from_bytes(signature.try_into().unwrap()) {
+    if signature_der.len() == 64 {
+        if let Ok(sig) = Signature::from_bytes(signature_der.try_into().unwrap()) {
             return vk.verify(&msg, &sig).is_ok();
         }
     }
     false
 }
 
-fn device_mac_key() -> Vec<u8> {
-    let id = load_or_create_identity().expect("identity");
-    let salt = hkdf::Salt::new(hkdf::HKDF_SHA256, b"vocalix v2 challenge");
-    let prk = salt.extract(id.to_bytes().as_slice());
-    let mut key = [0u8; 32];
-    prk.expand(&[b"challenge mac"], hkdf::HKDF_SHA256)
-        .unwrap()
-        .fill(&mut key)
-        .unwrap();
-    key.to_vec()
+pub fn create_challenge_signature_with_key(
+    my_signing_key: &SigningKey,
+    nonce: &[u8],
+    listener_pub_key: &[u8],
+) -> Vec<u8> {
+    use p256::ecdsa::signature::Signer;
+    let msg = build_challenge_msg(listener_pub_key, nonce);
+    let sig: p256::ecdsa::Signature = my_signing_key.sign(&msg);
+    sig.to_der().as_bytes().to_vec()
 }
 
 pub fn create_session_keys(
@@ -293,14 +275,6 @@ fn label_static(label: &[u8]) -> Vec<u8> {
 
 use once_cell::sync::Lazy;
 use std::sync::Mutex as StdMutex;
-
-static LAST_CHALLENGE_NONCE: Lazy<StdMutex<Option<Vec<u8>>>> = Lazy::new(|| StdMutex::new(None));
-fn set_last_challenge_nonce(n: Vec<u8>) {
-    *LAST_CHALLENGE_NONCE.lock().unwrap() = Some(n);
-}
-fn get_last_challenge_nonce() -> Option<Vec<u8>> {
-    LAST_CHALLENGE_NONCE.lock().unwrap().clone()
-}
 
 static LAST_MY_EPH_PUB: Lazy<StdMutex<Option<Vec<u8>>>> = Lazy::new(|| StdMutex::new(None));
 fn set_last_my_eph_pub(v: Vec<u8>) {
