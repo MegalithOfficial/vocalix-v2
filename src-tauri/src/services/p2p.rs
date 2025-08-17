@@ -230,7 +230,7 @@ pub async fn handle_connection(
                                             break;
                                         }
                                     }
-                                    
+
                                     (ConnectionState::Authenticating, Message::InitialDhKey(peer_dh_key_bytes))
                                     | (ConnectionState::WaitingForUserConfirmation, Message::InitialDhKey(peer_dh_key_bytes)) => {
                                         match p256::PublicKey::from_sec1_bytes(peer_dh_key_bytes) {
@@ -411,6 +411,12 @@ pub async fn handle_connection(
 
                                     (_, Message::Disconnect { reason }) => {
                                         log_and_emit(&window, role, "DISCONNECT", &format!("Peer requested disconnect: {}", reason)).await;
+
+                                        window.emit("PEER_DISCONNECT", reason.clone()).ok();
+                                        window.emit("CLIENT_DISCONNECTED", ()).ok();
+
+                                        clear_shared_connection_state(&window).await;
+
                                         break;
                                     }
 
@@ -561,6 +567,7 @@ pub async fn handle_connection(
     }
     log_and_emit(&window, role, "CONNECTION_ENDED", "Connection loop ended, cleaning up").await;
     clear_shared_connection_state(&window).await;
+    window.emit("CLIENT_DISCONNECTED", ()).ok();
 }
 
 async fn handle_decrypted(window: &Window, plaintext: String) {
