@@ -86,6 +86,19 @@ pub async fn handle_connection(
         send_message(&mut stream, &Message::Hello(my_public_key_bytes.clone())).await;
     }
 
+    // Keep-alive mechanism (server sends, client responds)
+    // Note: Only the server (listener) should implement timeout logic.
+    // Clients should never disconnect due to inactivity since the server
+    // will send keep-alive messages every 15 seconds.
+    let mut keepalive_interval = if !is_initiator {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        Some(interval)
+    } else {
+        None
+    };
+    let mut last_keepalive_ack = std::time::Instant::now();
+
     log_and_emit(
         &window,
         role,
@@ -410,6 +423,10 @@ pub async fn handle_connection(
 
                                                 connection_state = ConnectionState::Encrypted;
                                                 update_shared_connection_state(&window, Some(connection_state.clone())).await;
+                                                
+                                                // Reset keep-alive timer when encrypted connection is established
+                                                last_keepalive_ack = std::time::Instant::now();
+                                                
                                                 window.emit("SUCCESS", "Secure encrypted channel established!").ok();
                                                 window.emit("CLIENT_CONNECTED", ()).ok();
                                             } else {
@@ -433,6 +450,16 @@ pub async fn handle_connection(
                                                 }
                                             }
                                         }
+                                    }
+
+                                    (_, Message::KeepAlive) => {
+                                        log_and_emit(&window, role, "KEEPALIVE_RECEIVED", "Received keep-alive, sending ack").await;
+                                        send_message(&mut stream, &Message::KeepAliveAck).await;
+                                    }
+
+                                    (_, Message::KeepAliveAck) => {
+                                        last_keepalive_ack = std::time::Instant::now();
+                                        log_and_emit(&window, role, "KEEPALIVE_ACK", "Received keep-alive acknowledgment").await;
                                     }
 
                                     (_, Message::Disconnect { reason }) => {
@@ -509,6 +536,25 @@ pub async fn handle_connection(
                                     }
                                     Err(e) => {
                                         log_and_emit(&window, role, "CONFIRMATION_RX_ERROR", &format!("Confirmation receiver error: {}", e)).await;
+                                    }
+                                }
+                            }
+
+                            _ = async {
+                                if let Some(ref mut interval) = keepalive_interval {
+                                    interval.tick().await
+                                } else {
+                                    std::future::pending().await
+                                }
+                            } => {
+                                if connection_state == ConnectionState::Encrypted {
+                                    log_and_emit(&window, role, "KEEPALIVE_SEND", "Sending keep-alive").await;
+                                    send_message(&mut stream, &Message::KeepAlive).await;
+                                    
+                                    if !is_initiator && last_keepalive_ack.elapsed().as_secs() > 30 {
+                                        log_and_emit(&window, role, "KEEPALIVE_TIMEOUT", "Keep-alive timeout - peer not responding").await;
+                                        window.emit("ERROR", "Connection lost - peer not responding to keep-alive").ok();
+                                        break;
                                     }
                                 }
                             }

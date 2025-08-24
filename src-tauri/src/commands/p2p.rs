@@ -66,6 +66,11 @@ pub async fn start_listener(
                     log_info!("P2P", "Accepted connection from {}", addr);
                     win.emit("STATUS_UPDATE", format!("Accepted connection from {}", addr)).ok();
 
+                    // Configure TCP settings to prevent idle disconnections
+                    if let Err(e) = stream.set_nodelay(true) {
+                        println!("Failed to set TCP_NODELAY on accepted connection: {}", e);
+                    }
+
                     let confirmation_rx = confirm_tx.subscribe();
 
                     tokio::spawn(handle_connection(
@@ -124,6 +129,11 @@ pub async fn start_initiator(
         }
         Ok(Ok(s)) => s,
     };
+
+    // Configure TCP keep-alive to prevent idle disconnections
+    if let Err(e) = stream.set_nodelay(true) {
+        println!("Failed to set TCP_NODELAY: {}", e);
+    }
 
     window.emit("STATUS_UPDATE", "Connection established!").ok();
 

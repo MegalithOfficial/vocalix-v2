@@ -10,7 +10,7 @@ pub struct LoggingState {
     pub log_file_path: Arc<std::sync::Mutex<String>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ConnectionState {
     Authenticating,
     WaitingForUserConfirmation,
@@ -59,7 +59,7 @@ pub enum Message {
     InitialDhKey(Vec<u8>),
     ResponseDhKey(Vec<u8>),
 
-    PairingConfirmed, // after user confirms the same code
+    PairingConfirmed, 
 
     SessionKeyRequest(Vec<u8>), // my ephemeral public key (SEC1)
     SessionKeyResponse(Vec<u8>), // peer ephemeral public key (SEC1)
@@ -77,6 +77,9 @@ pub enum Message {
     },
 
     PlaintextMessage(String),
+
+    KeepAlive,
+    KeepAliveAck,
 
     Disconnect { reason: String },
 }
