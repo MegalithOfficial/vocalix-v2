@@ -331,7 +331,7 @@ const ServerPage = () => {
     
     try {
       const { load } = await import('@tauri-apps/plugin-store');
-      const store = await load('redemptions.json', { autoSave: false });
+      const store = await load('redemptions.json', { autoSave: false, defaults: {} });
       const configs = await store.get('redemptionConfigs') as Record<string, any>;
       const redemptionConfig = configs?.[redemption.reward_id];
 
@@ -588,7 +588,7 @@ const ServerPage = () => {
   const loadRedemptionConfig = async (rewardId: string) => {
     try {
       const { load } = await import('@tauri-apps/plugin-store');
-      const store = await load('redemptions.json', { autoSave: false });
+      const store = await load('redemptions.json', { autoSave: false, defaults: {} });
       const configs = await store.get('redemptionConfigs') as Record<string, any>;
       const config = configs?.[rewardId];
       

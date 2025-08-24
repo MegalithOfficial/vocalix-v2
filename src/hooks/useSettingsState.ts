@@ -128,7 +128,7 @@ export const useSettingsState = (activeTab?: string) => {
   const saveRedemptionConfigs = async (configs: Record<string, RedemptionConfig>) => {
     try {
       setIsSavingConfigs(true);
-      const store = await load('redemptions.json', { autoSave: false });
+      const store = await load('redemptions.json', { autoSave: false, defaults: {} });
 
       const serializableConfigs: Record<string, SerializableRedemptionConfig> = {};
       for (const [key, config] of Object.entries(configs)) {
@@ -156,7 +156,7 @@ export const useSettingsState = (activeTab?: string) => {
 
   const loadRedemptionConfigs = async (): Promise<Record<string, RedemptionConfig>> => {
     try {
-      const store = await load('redemptions.json', { autoSave: false });
+      const store = await load('redemptions.json', { autoSave: false, defaults: {} });
       const configs = await store.get<Record<string, SerializableRedemptionConfig>>('redemptionConfigs');
       console.log('Loaded redemption configurations:', configs);
 
@@ -265,7 +265,7 @@ export const useSettingsState = (activeTab?: string) => {
       console.error('Error saving security settings:', error);
     }
     try {
-      const store = await load('client-settings.json', { autoSave: true });
+      const store = await load('client-settings.json', { autoSave: true, defaults: {} });
       await store.set('autoConnectEnabled', autoConnectEnabled);
       await store.set('autoConnectAddress', autoConnectAddress.trim());
       await store.save();
@@ -285,7 +285,7 @@ export const useSettingsState = (activeTab?: string) => {
 
       console.log('Saving audio config:', audioConfig);
 
-      const store = await load('audio-settings.json', { autoSave: false });
+      const store = await load('audio-settings.json', { autoSave: false, defaults: {} });
       await store.set('audioSettings', audioConfig);
       await store.save();
 
@@ -297,7 +297,7 @@ export const useSettingsState = (activeTab?: string) => {
 
   const loadAudioSettings = async () => {
     try {
-      const store = await load('audio-settings.json', { autoSave: false });
+      const store = await load('audio-settings.json', { autoSave: false, defaults: {} });
       const config = await store.get<{
         audioQuality: AudioQuality;
         selectedOutputDevice: string;
@@ -377,7 +377,7 @@ export const useSettingsState = (activeTab?: string) => {
       console.error('Error loading security settings:', error);
     }
     try {
-      const store = await load('client-settings.json', { autoSave: true });
+      const store = await load('client-settings.json', { autoSave: true, defaults: {} });
       const enabled = await store.get<boolean>('autoConnectEnabled');
       const address = await store.get<string>('autoConnectAddress');
       if (enabled !== undefined && enabled !== null) setAutoConnectEnabled(enabled);

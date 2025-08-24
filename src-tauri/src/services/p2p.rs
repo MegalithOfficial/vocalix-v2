@@ -86,10 +86,6 @@ pub async fn handle_connection(
         send_message(&mut stream, &Message::Hello(my_public_key_bytes.clone())).await;
     }
 
-    // Keep-alive mechanism (server sends, client responds)
-    // Note: Only the server (listener) should implement timeout logic.
-    // Clients should never disconnect due to inactivity since the server
-    // will send keep-alive messages every 15 seconds.
     let mut keepalive_interval = if !is_initiator {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);

@@ -225,7 +225,10 @@ const ClientPage = () => {
       const loadAudioSettings = async () => {
          try {
             const { load } = await import('@tauri-apps/plugin-store');
-            const store = await load('audio-settings.json', { autoSave: false });
+            const store = await load('audio-settings.json', { 
+               autoSave: false,
+               defaults: {} 
+            });
             const settings = await store.get('audioSettings') as any;
             if (settings?.outputDevice) {
                setAudioDeviceId(settings.outputDevice);
@@ -696,7 +699,10 @@ const ClientPage = () => {
       try {
          if (!settingsStoreRef.current) {
             const { load } = await import('@tauri-apps/plugin-store');
-            settingsStoreRef.current = await load('client-settings.json', { autoSave: true });
+            settingsStoreRef.current = await load('client-settings.json', { 
+               autoSave: true,
+               defaults: {}
+            });
          }
          let current: string[] = (await settingsStoreRef.current.get('recentServers')) as string[] || [];
          current = [address, ...current.filter(a => a !== address)];
@@ -712,7 +718,7 @@ const ClientPage = () => {
       const loadClientSettings = async () => {
          try {
             const { load } = await import('@tauri-apps/plugin-store');
-            const store = await load('client-settings.json', { autoSave: true });
+            const store = await load('client-settings.json', { autoSave: true, defaults: {} });
             settingsStoreRef.current = store;
             const recents = (await store.get('recentServers')) as string[] | undefined;
             const autoEn = (await store.get('autoConnectEnabled')) as boolean | undefined;
@@ -871,7 +877,7 @@ const ClientPage = () => {
       try {
          if (!settingsStoreRef.current) {
             const { load } = await import('@tauri-apps/plugin-store');
-            settingsStoreRef.current = await load('client-settings.json', { autoSave: true });
+            settingsStoreRef.current = await load('client-settings.json', { autoSave: true, defaults: {} });
          }
          await settingsStoreRef.current.set('autoConnectEnabled', next);
       } catch (e) {
@@ -884,7 +890,7 @@ const ClientPage = () => {
       try {
          if (!settingsStoreRef.current) {
             const { load } = await import('@tauri-apps/plugin-store');
-            settingsStoreRef.current = await load('client-settings.json', { autoSave: true });
+            settingsStoreRef.current = await load('client-settings.json', { autoSave: true, defaults: {} });
          }
          await settingsStoreRef.current.set('autoConnectAddress', address);
       } catch (e) {
