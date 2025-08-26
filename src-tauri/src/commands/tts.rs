@@ -314,17 +314,16 @@ pub async fn generate_static_tts_file(
     redemption_name: String,
     text: String,
     voice: Option<String>,
-    tts_mode: Option<String>,           // "normal"|"rvc"
+    tts_mode: Option<String>,           // "normal" | "rvc"
     model_file: Option<String>,         // RVC only
     device: Option<String>,             // RVC optional overrides
     inference_rate: Option<f64>,
     filter_radius: Option<i32>,
     resample_rate: Option<f64>,
     protect_rate: Option<f64>,
-    file_basename: Option<String>,      // used for naming
-    format: Option<String>,             // default "mp3"; may fall back to "wav" in RVC if no transcoder
+    file_basename: Option<String>,      
+    format: Option<String>,             
 ) -> Result<StaticTtsResult, String> {
-    // Validate and sanitize inputs
     let mut trimmed = text.trim().to_string();
     if trimmed.is_empty() {
         app.emit("tts_status", serde_json::json!({"progress": 0, "status": "error_empty_text"})).ok();
@@ -347,7 +346,6 @@ pub async fn generate_static_tts_file(
             .to_string()
     };
 
-    // Ensure environment (python venv) exists as edge-tts / rvc live there
     let (_venv_dir, python_path) = match venv_paths(&app) {
         Ok(v) => v,
         Err(e) => {
@@ -372,7 +370,6 @@ pub async fn generate_static_tts_file(
     let ts = timestamp_suffix();
 
     if mode == "normal" {
-        // Normal: synthesize directly to desired container via edge-tts
         let ext = if want_format == "wav" { "wav" } else { "mp3" };
         let file_name = format!("{}-{}.{}", safe_basename, ts, ext);
         let abs_path = dest_dir.join(&file_name);
@@ -412,7 +409,6 @@ pub async fn generate_static_tts_file(
             message: "Normal TTS generation completed".to_string(),
         })
     } else {
-        // RVC pipeline: use existing generate_tts for validation and conversion to WAV
         app.emit("tts_status", serde_json::json!({"progress": 50, "status": "rvc_start"})).ok();
 
         let rvc_json = generate_tts(
@@ -446,7 +442,6 @@ pub async fn generate_static_tts_file(
 
         app.emit("tts_status", serde_json::json!({"progress": 75, "status": "rvc_converted"})).ok();
 
-        // Optional transcode to MP3 if requested and ffmpeg is available
         if want_format == "mp3" {
             app.emit("tts_status", serde_json::json!({"progress": 80, "status": "transcoding"})).ok();
 
