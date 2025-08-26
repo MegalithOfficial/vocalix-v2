@@ -83,10 +83,11 @@ pub async fn get_audio_files(
 
         if path.is_file() {
             if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
-                if file_name.ends_with(".mp3") {
+                let lower = file_name.to_lowercase();
+                if lower.ends_with(".mp3") || lower.ends_with(".wav") {
                     files.push(file_name.to_string());
                 } else {
-                    log_warn!("AudioManager", "Skipping non-mp3 file: {}", file_name);
+                    log_warn!("AudioManager", "Skipping non-audio file: {}", file_name);
                 }
             }
         }

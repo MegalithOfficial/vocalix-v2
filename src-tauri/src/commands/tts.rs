@@ -261,3 +261,246 @@ pub async fn test_tts_rvc(
         Some(protect_rate),
     ).await.map(|_| ())
 }
+
+#[derive(serde::Serialize, Debug)]
+pub struct StaticTtsResult {
+    pub absolute_path: String,
+    pub relative_path: String,
+    pub file_name: String,
+    pub mime_type: String,
+    pub message: String,
+}
+
+fn sanitize_component(input: &str) -> String {
+    let mut out = String::new();
+    let mut last_us = false;
+    for ch in input.chars() {
+        let ok = ch.is_ascii_alphanumeric() || ch == '_';
+        if ok {
+            out.push(ch);
+            last_us = false;
+        } else {
+            if !last_us {
+                out.push('_');
+                last_us = true;
+            }
+        }
+    }
+    let trimmed = out.trim_matches('_').to_string();
+    if trimmed.is_empty() { "default".to_string() } else { trimmed }
+}
+
+fn ensure_static_audios_dir(app: &tauri::AppHandle, redemption: &str) -> Result<std::path::PathBuf, String> {
+    use std::fs;
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data directory: {}", e))?;
+    let dir = app_data_dir.join("static_audios").join(redemption);
+    fs::create_dir_all(&dir)
+        .map_err(|e| format!("Failed to create directory {:?}: {}", dir, e))?;
+    Ok(dir)
+}
+
+fn timestamp_suffix() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    format!("{}", now.as_millis())
+}
+
+#[tauri::command]
+pub async fn generate_static_tts_file(
+    app: tauri::AppHandle,
+    redemption_name: String,
+    text: String,
+    voice: Option<String>,
+    tts_mode: Option<String>,           // "normal"|"rvc"
+    model_file: Option<String>,         // RVC only
+    device: Option<String>,             // RVC optional overrides
+    inference_rate: Option<f64>,
+    filter_radius: Option<i32>,
+    resample_rate: Option<f64>,
+    protect_rate: Option<f64>,
+    file_basename: Option<String>,      // used for naming
+    format: Option<String>,             // default "mp3"; may fall back to "wav" in RVC if no transcoder
+) -> Result<StaticTtsResult, String> {
+    // Validate and sanitize inputs
+    let mut trimmed = text.trim().to_string();
+    if trimmed.is_empty() {
+        app.emit("tts_status", serde_json::json!({"progress": 0, "status": "error_empty_text"})).ok();
+        return Err("Text cannot be empty".to_string());
+    }
+    if trimmed.chars().count() > 5000 {
+        trimmed = trimmed.chars().take(5000).collect();
+    }
+    let safe_redemption = sanitize_component(&redemption_name);
+    let safe_basename = sanitize_component(&file_basename.unwrap_or_else(|| "tts".to_string()));
+    let want_format = format.unwrap_or_else(|| "mp3".to_string()).to_lowercase();
+
+    let resolved_voice = if let Some(v) = voice {
+        v
+    } else {
+        let cfg = load_tts_settings(app.clone()).await.unwrap_or_else(|_| serde_json::json!({}));
+        cfg.get("selectedVoice")
+            .and_then(|v| v.as_str())
+            .unwrap_or("en-US-JennyNeural")
+            .to_string()
+    };
+
+    // Ensure environment (python venv) exists as edge-tts / rvc live there
+    let (_venv_dir, python_path) = match venv_paths(&app) {
+        Ok(v) => v,
+        Err(e) => {
+            app.emit("tts_status", serde_json::json!({"progress": 0, "status": format!("error_env: {}", e)})).ok();
+            return Err(e);
+        }
+    };
+
+    let mode = tts_mode.unwrap_or_else(|| "normal".to_string());
+
+    let dest_dir = ensure_static_audios_dir(&app, &safe_redemption)?;
+
+    app.emit("tts_status", serde_json::json!({
+        "progress": 5,
+        "status": "start",
+        "mode": mode,
+        "voice": resolved_voice,
+        "redemption": safe_redemption,
+        "format": want_format
+    })).ok();
+
+    let ts = timestamp_suffix();
+
+    if mode == "normal" {
+        // Normal: synthesize directly to desired container via edge-tts
+        let ext = if want_format == "wav" { "wav" } else { "mp3" };
+        let file_name = format!("{}-{}.{}", safe_basename, ts, ext);
+        let abs_path = dest_dir.join(&file_name);
+
+        let edge_args = [
+            "-m", "edge_tts",
+            "--voice", &resolved_voice,
+            "--text", &trimmed,
+            "--write-media", &convert_path_for_cli(&abs_path),
+        ];
+
+        app.emit("tts_status", serde_json::json!({"progress": 15, "status": "edge_tts_start"})).ok();
+        log_info!("TTS", "Running edge-tts: python {:?} {:?}", python_path, edge_args);
+
+        let edge_status = create_hidden_command(&python_path)
+            .args(&edge_args)
+            .status()
+            .map_err(|e| {
+                app.emit("tts_status", serde_json::json!({"progress": 0, "status": format!("error_edge_tts: {}", e)})).ok();
+                format!("Failed to execute edge-tts: {}", e)
+            })?;
+        if !edge_status.success() {
+            app.emit("tts_status", serde_json::json!({"progress": 0, "status": "error_edge_tts"})).ok();
+            return Err("Edge TTS conversion failed".into());
+        }
+
+        let rel_path = format!("static_audios/{}/{}", safe_redemption, file_name);
+        let mime = if ext == "mp3" { "audio/mpeg" } else { "audio/wav" }.to_string();
+
+        app.emit("tts_status", serde_json::json!({"progress": 100, "status": "done"})).ok();
+
+        Ok(StaticTtsResult {
+            absolute_path: abs_path.to_string_lossy().to_string(),
+            relative_path: rel_path,
+            file_name,
+            mime_type: mime,
+            message: "Normal TTS generation completed".to_string(),
+        })
+    } else {
+        // RVC pipeline: use existing generate_tts for validation and conversion to WAV
+        app.emit("tts_status", serde_json::json!({"progress": 50, "status": "rvc_start"})).ok();
+
+        let rvc_json = generate_tts(
+            app.clone(),
+            "rvc".into(),
+            trimmed.clone(),
+            Some(resolved_voice.clone()),
+            model_file.clone(),
+            device.clone(),
+            inference_rate,
+            filter_radius,
+            resample_rate,
+            protect_rate,
+        ).await?;
+
+        let src_path_str = rvc_json.get("path")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "RVC output did not return a path".to_string())?;
+        let src_wav = std::path::PathBuf::from(src_path_str);
+        if !src_wav.exists() {
+            app.emit("tts_status", serde_json::json!({"progress": 0, "status": "error_rvc_missing_output"})).ok();
+            return Err(format!("RVC output file does not exist: {}", src_wav.display()));
+        }
+
+        let wav_name = format!("{}-{}.wav", safe_basename, ts);
+        let wav_dest = dest_dir.join(&wav_name);
+
+        std::fs::copy(&src_wav, &wav_dest)
+            .map_err(|e| format!("Failed to copy RVC output: {}", e))?;
+        let _ = std::fs::remove_file(&src_wav);
+
+        app.emit("tts_status", serde_json::json!({"progress": 75, "status": "rvc_converted"})).ok();
+
+        // Optional transcode to MP3 if requested and ffmpeg is available
+        if want_format == "mp3" {
+            app.emit("tts_status", serde_json::json!({"progress": 80, "status": "transcoding"})).ok();
+
+            let ffmpeg_check = create_hidden_command("ffmpeg").arg("-version").status();
+            if let Ok(st) = ffmpeg_check {
+                if st.success() {
+                    let mp3_name = format!("{}-{}.mp3", safe_basename, ts);
+                    let mp3_dest = dest_dir.join(&mp3_name);
+                    let ff_status = create_hidden_command("ffmpeg")
+                        .args([
+                            "-y",
+                            "-i",
+                            &convert_path_for_cli(&wav_dest),
+                            &convert_path_for_cli(&mp3_dest),
+                        ])
+                        .status();
+
+                    match ff_status {
+                        Ok(s) if s.success() => {
+                            let _ = std::fs::remove_file(&wav_dest);
+                            let rel_path = format!("static_audios/{}/{}", safe_redemption, mp3_name);
+                            app.emit("tts_status", serde_json::json!({"progress": 100, "status": "done"})).ok();
+                            return Ok(StaticTtsResult {
+                                absolute_path: mp3_dest.to_string_lossy().to_string(),
+                                relative_path: rel_path,
+                                file_name: mp3_name,
+                                mime_type: "audio/mpeg".to_string(),
+                                message: "RVC TTS generation completed (mp3)".to_string(),
+                            });
+                        }
+                        Ok(_) => {
+                            app.emit("tts_status", serde_json::json!({"progress": 90, "status": "transcode_failed"})).ok();
+                        }
+                        Err(e) => {
+                            app.emit("tts_status", serde_json::json!({"progress": 90, "status": format!("transcode_failed: {}", e)})).ok();
+                        }
+                    }
+                } else {
+                    app.emit("tts_status", serde_json::json!({"progress": 80, "status": "transcode_skipped"})).ok();
+                }
+            } else {
+                app.emit("tts_status", serde_json::json!({"progress": 80, "status": "transcode_skipped"})).ok();
+            }
+        }
+
+        let rel_path = format!("static_audios/{}/{}", safe_redemption, wav_name);
+        app.emit("tts_status", serde_json::json!({"progress": 100, "status": "done"})).ok();
+
+        Ok(StaticTtsResult {
+            absolute_path: wav_dest.to_string_lossy().to_string(),
+            relative_path: rel_path,
+            file_name: wav_name,
+            mime_type: "audio/wav".to_string(),
+            message: "RVC TTS generation completed (wav)".to_string(),
+        })
+    }
+}

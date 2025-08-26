@@ -136,6 +136,7 @@ fn main() {
             commands::tts::save_tts_settings,
             commands::tts::load_tts_settings,
             commands::tts::generate_tts,
+            commands::tts::generate_static_tts_file,
             commands::python::save_pth_model,
             commands::python::get_pth_models,
             commands::python::delete_pth_model,
