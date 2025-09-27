@@ -2,12 +2,13 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { load } from '@tauri-apps/plugin-store';
 import { AudioQuality } from '../utils/audioSettings';
-import { 
-  TwitchRedemption, 
-  RedemptionConfig, 
-  SerializableRedemptionConfig, 
+import {
+  TwitchRedemption,
+  RedemptionConfig,
+  SerializableRedemptionConfig,
   RvcSettings,
-  TwitchAuthStatus 
+  TwitchAuthStatus,
+  StaticTtsResult
 } from '../types/settings';
 
 export const useSettingsState = (activeTab?: string) => {
@@ -23,7 +24,7 @@ export const useSettingsState = (activeTab?: string) => {
   const [rvcModelFile, setRvcModelFile] = useState<File | null>(null);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>('');
-  const [availableDevices, setAvailableDevices] = useState<Array<{type: string, name: string, id: string}>>([]);
+  const [availableDevices, setAvailableDevices] = useState<Array<{ type: string, name: string, id: string }>>([]);
   const [rvcSettings, setRvcSettings] = useState<RvcSettings>({
     device: 'cuda:0',
     inferenceRate: 0.75,
@@ -70,9 +71,9 @@ export const useSettingsState = (activeTab?: string) => {
       if (activeTab === 'twitch') {
         console.log('SettingsPage: Received auth status:', status);
       }
-  if (status === 'no_credentials' || status === 'invalid' || status === 'not_authenticated') {
+      if (status === 'no_credentials' || status === 'invalid' || status === 'not_authenticated') {
         setTwitchAuthStatus('needs_credentials');
-  } else if (status === 'valid' || status === 'expiring_soon') {
+      } else if (status === 'valid' || status === 'expiring_soon') {
         setTwitchAuthStatus('ready');
       } else {
         setTwitchAuthStatus('checking');
@@ -303,9 +304,9 @@ export const useSettingsState = (activeTab?: string) => {
         selectedOutputDevice: string;
         volume: number;
       }>('audioSettings');
-      
+
       console.log('Loaded audio config from storage:', config);
-      
+
       if (config) {
         setAudioQuality(config.audioQuality || 'high');
         setSelectedOutputDevice(config.selectedOutputDevice || 'default');
@@ -325,7 +326,7 @@ export const useSettingsState = (activeTab?: string) => {
     try {
       const config = await invoke('load_tts_settings') as any;
       console.log('Loaded TTS config from backend:', config);
-      
+
       if (config) {
         setTtsMode(config.ttsMode || 'normal');
         setTtsProvider(config.ttsProvider || 'edgetts');
@@ -358,18 +359,18 @@ export const useSettingsState = (activeTab?: string) => {
 
   const loadAvailableDevices = useCallback(async () => {
     try {
-      const devices = await invoke('get_available_devices') as Array<{type: string, name: string, id: string}>;
+      const devices = await invoke('get_available_devices') as Array<{ type: string, name: string, id: string }>;
       setAvailableDevices(devices);
       console.log('Available devices loaded:', devices);
     } catch (error) {
       console.error('Error loading available devices:', error);
-      setAvailableDevices([{type: 'cpu', name: 'CPU', id: 'cpu'}]);
+      setAvailableDevices([{ type: 'cpu', name: 'CPU', id: 'cpu' }]);
     }
   }, []);
 
   const loadSecuritySettings = useCallback(async () => {
     try {
-      const settings = await invoke('load_security_settings') as {p2p_port: number, only_client_mode: boolean};
+      const settings = await invoke('load_security_settings') as { p2p_port: number, only_client_mode: boolean };
       setP2pPort(settings.p2p_port);
       setOnlyClientMode(settings.only_client_mode);
       console.log('Security settings loaded:', settings);
@@ -398,9 +399,9 @@ export const useSettingsState = (activeTab?: string) => {
       });
 
       console.log(`Model file deleted: ${modelName}`);
-      
+
       await loadAvailableModels();
-      
+
       if (selectedModel === modelName) {
         setSelectedModel('');
       }
@@ -415,14 +416,14 @@ export const useSettingsState = (activeTab?: string) => {
       try {
         const devices = await navigator.mediaDevices.enumerateDevices();
         const audioOutputs = devices.filter(device => device.kind === 'audiooutput');
-        
+
         const defaultDevice = {
           deviceId: 'default',
           kind: 'audiooutput' as const,
           label: 'Default Audio Output',
           groupId: ''
         } as MediaDeviceInfo;
-        
+
         if (audioOutputs.length > 0) {
           setOutputDevices([defaultDevice, ...audioOutputs]);
           console.log('Audio output devices loaded successfully:', audioOutputs.length + 1);
@@ -453,7 +454,7 @@ export const useSettingsState = (activeTab?: string) => {
 
   useEffect(() => {
     let authCheckInterval: number | null = null;
-    
+
     if (activeTab === 'twitch') {
       console.log('SettingsPage: Starting Twitch auth status polling');
       authCheckInterval = setInterval(checkTwitchAuthStatus, 5000);
@@ -474,7 +475,7 @@ export const useSettingsState = (activeTab?: string) => {
       try {
         setIsCheckingEnvironment(true);
         const status = await invoke('check_environment_status') as any;
-        
+
         if (status.environment_ready) {
           setEnvironmentReady(true);
           if (status.python_version) {
@@ -552,6 +553,20 @@ export const useSettingsState = (activeTab?: string) => {
     }
   }, [redemptions]);
 
+  const generateStaticTtsFile = async (args: {
+    redemptionName: string;
+    text: string;
+    ttsMode: 'normal' | 'rvc';
+  }): Promise<StaticTtsResult> => {
+    const { redemptionName, text, ttsMode } = args;
+    const sanitized = redemptionName.replace(/[^a-zA-Z0-9]/g, '_');
+    const result = await invoke('generate_static_tts_file', {
+      redemptionName: sanitized,
+      text,
+      ttsMode,
+    }) as StaticTtsResult;
+    return result;
+  };
   return {
     audioQuality,
     setAudioQuality,
@@ -638,11 +653,13 @@ export const useSettingsState = (activeTab?: string) => {
     setP2pPort,
     onlyClientMode,
     setOnlyClientMode,
-  autoConnectEnabled,
-  setAutoConnectEnabled,
-  autoConnectAddress,
-  setAutoConnectAddress,
+    autoConnectEnabled,
+    setAutoConnectEnabled,
+    autoConnectAddress,
+    setAutoConnectAddress,
 
     checkTwitchAuthStatus,
+
+    generateStaticTtsFile,
   };
 };

@@ -1,6 +1,8 @@
+import { useState, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { Award, RefreshCw, X, ChevronUp, Edit2, Settings2, Volume, Timer, Upload, FileAudio } from 'lucide-react';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke, convertFileSrc } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import TwitchIntegration from '../TwitchIntegration';
 import { useSettingsState } from '../../hooks/useSettingsState';
 import { log } from '../../utils/logger';
@@ -25,7 +27,154 @@ const TwitchSettingsTab = ({ settingsState }: TwitchSettingsTabProps) => {
     loadRedemptions,
     updateRedemptionConfig,
     saveAudioFile,
-  } = settingsState;
+  
+loadTtsSettings,
+loadAvailableModels,
+availableModels,
+selectedModel,
+rvcModelFile,
+ttsMode,
+loadAudioFiles,
+generateStaticTtsFile,
+} = settingsState;
+
+// --- Static TTS Modal local state & handlers ---
+type TtsMethod = 'normal' | 'rvc';
+type StaticTtsResult = {
+  file_name: string;
+  absolute_path: string;
+  relative_path: string;
+};
+
+const [isTtsModalOpen, setIsTtsModalOpen] = useState(false);
+const [isGenerating, setIsGenerating] = useState(false);
+const [ttsText, setTtsText] = useState('');
+const [selectedMethod, setSelectedMethod] = useState<TtsMethod>('normal');
+const [rvcAvailable, setRvcAvailable] = useState(false);
+const [rvcLabel, setRvcLabel] = useState<string | undefined>(undefined);
+const [lastResult, setLastResult] = useState<StaticTtsResult | null>(null);
+const [ttsLogs, setTtsLogs] = useState<string[]>([]);
+const [modalRedemption, setModalRedemption] = useState<{ id: string; title: string } | null>(null);
+
+const audioRef = useRef<HTMLAudioElement | null>(null);
+const unlistenRef = useRef<null | (() => void)>(null);
+
+const openGenerateAudioModal = async (redemption: { id: string; title: string }) => {
+  setModalRedemption({ id: redemption.id, title: redemption.title });
+  setIsTtsModalOpen(true);
+  setIsGenerating(false);
+  setTtsText('');
+  setLastResult(null);
+  setTtsLogs([]);
+
+  try {
+    await loadTtsSettings();
+    await loadAvailableModels();
+  } catch (e) {
+    console.warn('Unable to load TTS settings/models before open:', e);
+  }
+
+  const models = availableModels || [];
+  const picked = selectedModel || rvcModelFile || (models.length > 0 ? models[0] : '');
+  let modelBase: string | undefined;
+  if (typeof picked === 'string') {
+    modelBase = picked.split(/[/\\]/).pop();
+  } else if (picked && typeof picked === 'object' && 'name' in picked) {
+    modelBase = picked.name;
+  } else {
+    modelBase = undefined;
+  }
+  const rvcIsAvailable = !!picked || models.length > 0;
+
+  setRvcAvailable(rvcIsAvailable);
+  setRvcLabel(modelBase ? `RVC (${modelBase})` : undefined);
+  setSelectedMethod(ttsMode === 'rvc' && rvcIsAvailable ? 'rvc' : 'normal');
+
+  try {
+    const unlisten = await listen('tts_status', (evt: any) => {
+      const payload = typeof evt.payload === 'string'
+        ? evt.payload
+        : (evt.payload?.message ?? JSON.stringify(evt.payload));
+      setTtsLogs(prev => [...prev, String(payload)]);
+    });
+    unlistenRef.current = unlisten;
+  } catch (err) {
+    console.error('Failed to listen tts_status:', err);
+  }
+
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') closeModal();
+  };
+  window.addEventListener('keydown', onKey, { once: true });
+};
+
+const closeModal = () => {
+  if (typeof unlistenRef.current === 'function') {
+    try { unlistenRef.current(); } catch {}
+    unlistenRef.current = null;
+  }
+  setIsTtsModalOpen(false);
+  setIsGenerating(false);
+  setTtsText('');
+  setLastResult(null);
+  setTtsLogs([]);
+  setModalRedemption(null);
+};
+
+const handleModalGenerate = async () => {
+  if (!modalRedemption) return;
+  const text = ttsText.trim();
+  if (!text) return;
+
+  setIsGenerating(true);
+  setLastResult(null);
+  setTtsLogs([]);
+
+  try {
+    const sanitized = modalRedemption.title.replace(/[^a-zA-Z0-9]/g, '_');
+    const res = await generateStaticTtsFile({
+      redemptionName: sanitized,
+      text,
+      ttsMode: selectedMethod,
+    });
+    setLastResult(res);
+
+    const src = convertFileSrc(res.absolute_path);
+    if (audioRef.current) {
+      audioRef.current.src = src;
+      audioRef.current.load();
+    }
+  } catch (err) {
+    console.error('Generation failed:', err);
+    setTtsLogs(prev => [...prev, 'Generation failed. See console for details.']);
+  } finally {
+    setIsGenerating(false);
+  }
+};
+
+const handleUseAudio = async () => {
+  if (!modalRedemption || !lastResult) return;
+  const sanitized = modalRedemption.title.replace(/[^a-zA-Z0-9]/g, '_');
+  try {
+    await loadAudioFiles(sanitized);
+    // If you add "active file" to RedemptionConfig later, you can set it here:
+    // updateRedemptionConfig(modalRedemption.id, { activeStaticFile: lastResult.file_name });
+  } catch (e) {
+    console.warn('Failed to refresh static audio list:', e);
+  }
+  closeModal();
+};
+
+const handlePlay = () => {
+  if (audioRef.current) audioRef.current.play().catch(() => {});
+};
+const handleStop = () => {
+  if (audioRef.current) {
+    audioRef.current.pause();
+    audioRef.current.currentTime = 0;
+  }
+};
+
 
   const handleFileUpload = async (redemptionId: string, files: FileList | null) => {
     if (!files) return;
@@ -314,9 +463,17 @@ const TwitchSettingsTab = ({ settingsState }: TwitchSettingsTabProps) => {
                                 </div>
                               ) : (
                                 <div className="space-y-3">
-                                  <label className="block text-sm font-medium text-gray-300">
-                                    Audio Files
-                                  </label>
+                                  <div className="flex items-center gap-2 mb-2">
+  <label className="block text-sm font-medium text-gray-300">Audio Files</label>
+  <button
+    type="button"
+    className="ml-auto px-3 py-1.5 rounded-md bg-purple-600 hover:bg-purple-700 text-white text-sm"
+    onClick={() => openGenerateAudioModal({ id: redemption.id, title: redemption.title })}
+    title="Generate a new static audio with saved TTS settings"
+  >
+    Generate Audio
+  </button>
+</div>
                                   <p className="text-xs text-gray-500 mb-2">
                                     Audio files are saved to the backend in static_audios/&lt;redemption_name&gt;/ folder.
                                   </p>
@@ -591,7 +748,113 @@ const TwitchSettingsTab = ({ settingsState }: TwitchSettingsTabProps) => {
           )}
         </div>
       )}
-    </motion.div>
+    
+
+{isTtsModalOpen && (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+    <div className="w-full max-w-2xl rounded-xl border border-gray-700 bg-gray-800 shadow-xl">
+      <div className="flex items-center justify-between px-5 py-3 border-b border-gray-700">
+        <div className="text-sm text-gray-400">
+          {modalRedemption ? `Generate Static Audio for: ${modalRedemption.title}` : 'Generate Static Audio'}
+        </div>
+        <button
+          className="text-gray-400 hover:text-white"
+          onClick={closeModal}
+          aria-label="Close"
+        >
+          ✕
+        </button>
+      </div>
+
+      <div className="p-5 space-y-4">
+        <div className="flex items-center gap-3">
+          <label className="text-sm text-gray-300 w-32">TTS method</label>
+          <select
+            className="flex-1 bg-gray-900 border border-gray-700 rounded-md px-3 py-2 text-sm text-gray-200"
+            value={selectedMethod}
+            onChange={(e) => setSelectedMethod(e.target.value as 'normal' | 'rvc')}
+          >
+            <option value="normal">Normal (Edge-TTS)</option>
+            {rvcAvailable && (
+              <option value="rvc">{rvcLabel ?? 'RVC (model.pth)'}</option>
+            )}
+          </select>
+        </div>
+
+        <div>
+          <label className="text-sm text-gray-300 mb-1 block">Text to synthesize</label>
+          <textarea
+            rows={5}
+            className="w-full bg-gray-900 border border-gray-700 rounded-md px-3 py-2 text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-purple-600"
+            placeholder="Type the line you want to generate..."
+            value={ttsText}
+            onChange={(e) => setTtsText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                handleModalGenerate();
+              }
+            }}
+          />
+          <p className="mt-1 text-xs text-gray-500">Press ⌘/Ctrl+Enter to generate.</p>
+        </div>
+
+        <div className="bg-gray-900 border border-gray-700 rounded-md p-3 max-h-40 overflow-auto text-xs text-gray-300">
+          {ttsLogs.length === 0 ? (
+            <span className="text-gray-500">Progress will appear here…</span>
+          ) : (
+            <ul className="space-y-1">
+              {ttsLogs.map((l, i) => (<li key={i} className="whitespace-pre-wrap">{l}</li>))}
+            </ul>
+          )}
+        </div>
+
+        <div className="flex items-center gap-3">
+          <audio ref={audioRef} controls className="flex-1" />
+          <button
+            className="px-3 py-1.5 rounded-md bg-gray-700 hover:bg-gray-600 text-white text-sm"
+            onClick={handlePlay}
+            disabled={!lastResult}
+          >
+            Play
+          </button>
+          <button
+            className="px-3 py-1.5 rounded-md bg-gray-700 hover:bg-gray-600 text-white text-sm"
+            onClick={handleStop}
+            disabled={!lastResult}
+          >
+            Stop
+          </button>
+        </div>
+      </div>
+
+      <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-gray-700">
+        <button
+          className="px-3 py-1.5 rounded-md bg-gray-700 hover:bg-gray-600 text-white text-sm"
+          onClick={closeModal}
+        >
+          Cancel
+        </button>
+        <button
+          className="px-3 py-1.5 rounded-md bg-purple-600 hover:bg-purple-700 text-white text-sm disabled:opacity-50"
+          onClick={handleModalGenerate}
+          disabled={isGenerating || !ttsText.trim()}
+          title="Generate static audio"
+        >
+          {isGenerating ? 'Generating…' : 'Generate'}
+        </button>
+        <button
+          className="px-3 py-1.5 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-sm disabled:opacity-50"
+          onClick={handleUseAudio}
+          disabled={!lastResult}
+          title="Use the last generated audio for this redemption"
+        >
+          Use audio
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+</motion.div>
   );
 };
 

@@ -9,6 +9,12 @@ export interface TwitchRedemption {
   prompt?: string;
 }
 
+export type StaticTtsResult = {
+  file_name: string;
+  absolute_path: string;
+  relative_path: string;
+};
+
 export interface RedemptionConfig {
   enabled: boolean;
   ttsType: 'dynamic' | 'static';
