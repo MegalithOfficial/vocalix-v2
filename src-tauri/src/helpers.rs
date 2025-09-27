@@ -1,8 +1,8 @@
 use crate::services::twitch::{parse_channel_points_redemption, EventSubEvent};
 use crate::{log_debug, log_error, log_info, log_warn};
-use tauri::{Emitter, Window, Manager};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tauri::{Emitter, Manager, Window};
 use tauri_plugin_store::StoreExt;
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -22,13 +22,15 @@ struct RedemptionConfig {
 
 fn is_redemption_allowed(redemption_id: &str, window: &Window) -> bool {
     let app = window.app_handle();
-    
+
     match app.store("redemptions.json") {
         Ok(store) => {
             if let Some(redemption_configs_value) = store.get("redemptionConfigs") {
                 if let Some(redemption_configs) = redemption_configs_value.as_object() {
                     if let Some(config_value) = redemption_configs.get(redemption_id) {
-                        if let Ok(config) = serde_json::from_value::<RedemptionConfig>(config_value.clone()) {
+                        if let Ok(config) =
+                            serde_json::from_value::<RedemptionConfig>(config_value.clone())
+                        {
                             log_info!(
                                 "RedemptionFilter",
                                 "Redemption {} is configured and enabled: {}",
@@ -62,7 +64,7 @@ fn is_redemption_allowed(redemption_id: &str, window: &Window) -> bool {
             log_error!("RedemptionFilter", "Failed to access store: {}", e);
         }
     }
-    
+
     log_info!(
         "RedemptionFilter",
         "Blocking redemption {} due to missing or invalid configuration",
@@ -275,7 +277,7 @@ pub fn create_hidden_command<P: AsRef<std::ffi::OsStr>>(program: P) -> std::proc
         cmd.creation_flags(CREATE_NO_WINDOW);
         cmd
     }
-    
+
     #[cfg(not(target_os = "windows"))]
     {
         std::process::Command::new(program)

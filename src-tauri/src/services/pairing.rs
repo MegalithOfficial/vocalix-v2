@@ -1,10 +1,10 @@
-use p256::{ecdh::EphemeralSecret, PublicKey};
 use p256::ecdsa::SigningKey;
+use p256::{ecdh::EphemeralSecret, PublicKey};
 
+use ::hkdf::Hkdf;
 use rand_core::OsRng;
 use ring::{aead, digest};
 use serde::{Deserialize, Serialize};
-use ::hkdf::Hkdf;
 use sha2::Sha256;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -13,7 +13,7 @@ use tokio::sync::Mutex;
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub device_identity: Arc<Mutex<Option<Arc<SigningKey>>>>,
-    pub known_peers: Arc<Mutex<HashMap<String, Vec<u8>>>>, 
+    pub known_peers: Arc<Mutex<HashMap<String, Vec<u8>>>>,
 }
 
 impl Default for AppState {
@@ -78,7 +78,6 @@ pub fn save_known_peers(peers: &HashMap<String, Vec<u8>>) -> anyhow::Result<()> 
     Ok(())
 }
 
-
 pub fn perform_initial_dh() -> (EphemeralSecret, Vec<u8>) {
     let sk = EphemeralSecret::random(&mut OsRng);
     let pk = sk.public_key().to_sec1_bytes().to_vec();
@@ -116,7 +115,6 @@ fn format_code_8(bytes: &[u8]) -> String {
     format!("{:08}", u64::from_be_bytes(arr) % 100_000_000)
 }
 
-
 fn build_challenge_msg(listener_pub_key: &[u8], nonce: &[u8]) -> Vec<u8> {
     let mut msg = b"sdl challenge v1".to_vec();
     msg.extend_from_slice(listener_pub_key);
@@ -138,10 +136,12 @@ pub fn verify_challenge_signature_with_nonce(
     nonce: &[u8],
     signature_der: &[u8],
 ) -> bool {
-    use p256::ecdsa::{Signature, VerifyingKey};
     use p256::ecdsa::signature::Verifier;
+    use p256::ecdsa::{Signature, VerifyingKey};
 
-    let Ok(vk) = VerifyingKey::from_sec1_bytes(peer_device_pubkey_sec1) else { return false; };
+    let Ok(vk) = VerifyingKey::from_sec1_bytes(peer_device_pubkey_sec1) else {
+        return false;
+    };
 
     let msg = build_challenge_msg(listener_pub_key, nonce);
     if let Ok(sig) = Signature::from_der(signature_der) {
@@ -181,11 +181,15 @@ pub fn create_session_keys(
     use anyhow::anyhow;
 
     let peer_public_key = PublicKey::from_sec1_bytes(peer_public_key_bytes)?;
-    let shared_secret   = my_secret.diffie_hellman(&peer_public_key);
+    let shared_secret = my_secret.diffie_hellman(&peer_public_key);
 
-    let my_pub    = my_secret.public_key().to_sec1_bytes();
+    let my_pub = my_secret.public_key().to_sec1_bytes();
     let their_pub = peer_public_key.to_sec1_bytes();
-    let (a, b)    = if my_pub <= their_pub { (my_pub.clone(), their_pub.clone()) } else { (their_pub.clone(), my_pub.clone()) };
+    let (a, b) = if my_pub <= their_pub {
+        (my_pub.clone(), their_pub.clone())
+    } else {
+        (their_pub.clone(), my_pub.clone())
+    };
 
     let transcript = {
         let mut ctx = digest::Context::new(&digest::SHA256);
@@ -198,7 +202,7 @@ pub fn create_session_keys(
     let hk = Hkdf::<Sha256>::new(Some(&transcript), shared_secret.raw_secret_bytes());
 
     let mut k_ab = [0u8; 32];
-    hk.expand(&label_dir("key", &a, &b, true),  &mut k_ab)
+    hk.expand(&label_dir("key", &a, &b, true), &mut k_ab)
         .map_err(|_| anyhow!("HKDF expand k_ab failed"))?;
     let mut k_ba = [0u8; 32];
     hk.expand(&label_dir("key", &a, &b, false), &mut k_ba)
@@ -239,7 +243,6 @@ pub fn create_session_keys(
 
     Ok((enc, dec, np_send, np_recv, session_id, kc_send, kc_recv))
 }
-
 
 fn sha256_concat(parts: &[&[u8]]) -> Vec<u8> {
     let mut ctx = digest::Context::new(&digest::SHA256);

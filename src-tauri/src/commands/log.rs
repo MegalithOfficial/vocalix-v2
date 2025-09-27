@@ -1,4 +1,4 @@
-use crate::logging::{LogEntry, get_logs as get_logs_from_buffer, clear_logs as clear_logs_buffer};
+use crate::logging::{clear_logs as clear_logs_buffer, get_logs as get_logs_from_buffer, LogEntry};
 use crate::state::LoggingState;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
@@ -12,8 +12,14 @@ pub async fn write_log(
     _timestamp: String,
     logging_state: State<'_, LoggingState>,
 ) -> Result<(), String> {
-    log_info!("LogCommand", "Frontend requested log write: [{}] [{}] {}", level, component, message);
-    
+    log_info!(
+        "LogCommand",
+        "Frontend requested log write: [{}] [{}] {}",
+        level,
+        component,
+        message
+    );
+
     let log_entry = LogEntry {
         timestamp: chrono::Utc::now(),
         level: match level.to_lowercase().as_str() {
@@ -66,21 +72,29 @@ pub async fn write_log(
 }
 
 #[tauri::command]
-pub async fn get_logs(logging_state: State<'_, LoggingState>) -> Result<Vec<serde_json::Value>, String> {
+pub async fn get_logs(
+    logging_state: State<'_, LoggingState>,
+) -> Result<Vec<serde_json::Value>, String> {
     log_debug!("LogCommand", "Getting logs from buffer and file");
-    
+
     let buffer_logs = get_logs_from_buffer();
     if !buffer_logs.is_empty() {
-        log_info!("LogCommand", "Returning {} logs from memory buffer", buffer_logs.len());
+        log_info!(
+            "LogCommand",
+            "Returning {} logs from memory buffer",
+            buffer_logs.len()
+        );
         let serialized_logs: Vec<serde_json::Value> = buffer_logs
             .into_iter()
-            .map(|entry| serde_json::json!({
-                "timestamp": entry.timestamp.format("%Y-%m-%d %H:%M:%S%.3f UTC").to_string(),
-                "level": entry.level.to_string().to_lowercase(),
-                "component": entry.component,
-                "message": entry.message,
-                "context": entry.context
-            }))
+            .map(|entry| {
+                serde_json::json!({
+                    "timestamp": entry.timestamp.format("%Y-%m-%d %H:%M:%S%.3f UTC").to_string(),
+                    "level": entry.level.to_string().to_lowercase(),
+                    "component": entry.component,
+                    "message": entry.message,
+                    "context": entry.context
+                })
+            })
             .collect();
         return Ok(serialized_logs);
     }
@@ -121,9 +135,9 @@ pub async fn get_logs(logging_state: State<'_, LoggingState>) -> Result<Vec<serd
 #[tauri::command]
 pub async fn clear_logs(logging_state: State<'_, LoggingState>) -> Result<(), String> {
     log_info!("LogCommand", "Clearing logs (both buffer and file)");
-    
+
     clear_logs_buffer();
-    
+
     let log_file_path = logging_state
         .log_file_path
         .lock()
@@ -133,7 +147,7 @@ pub async fn clear_logs(logging_state: State<'_, LoggingState>) -> Result<(), St
         Ok(_) => {
             log_info!("LogCommand", "Successfully cleared log file");
             Ok(())
-        },
+        }
         Err(e) => {
             log_error!("LogCommand", "Failed to clear log file: {}", e);
             Err(format!("Failed to clear log file: {}", e))

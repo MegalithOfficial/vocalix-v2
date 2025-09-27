@@ -1,7 +1,7 @@
-use crate::{log_info, log_warn, log_error, log_debug, log_critical};
-use tauri::{AppHandle, Manager};
-use std::sync::Mutex;
+use crate::{log_critical, log_debug, log_error, log_info, log_warn};
 use std::process::Child;
+use std::sync::Mutex;
+use tauri::{AppHandle, Manager};
 
 static AUDIO_PROCESS: Mutex<Option<Child>> = Mutex::new(None);
 
@@ -22,20 +22,21 @@ pub async fn save_audio_file(
     use base64::{engine::general_purpose, Engine as _};
     use std::fs;
 
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| {
-            log_error!("AudioManager", "Failed to get app data directory: {}", e);
-            format!("Failed to get app data directory: {}", e)
-        })?;
+    let app_data_dir = app.path().app_data_dir().map_err(|e| {
+        log_error!("AudioManager", "Failed to get app data directory: {}", e);
+        format!("Failed to get app data directory: {}", e)
+    })?;
 
     let dir_path = app_data_dir.join("static_audios").join(&redemption_name);
-    fs::create_dir_all(&dir_path)
-        .map_err(|e| {
-            log_error!("AudioManager", "Failed to create directory {:?}: {}", dir_path, e);
-            format!("Failed to create directory {:?}: {}", dir_path, e)
-        })?;
+    fs::create_dir_all(&dir_path).map_err(|e| {
+        log_error!(
+            "AudioManager",
+            "Failed to create directory {:?}: {}",
+            dir_path,
+            e
+        );
+        format!("Failed to create directory {:?}: {}", dir_path, e)
+    })?;
 
     let audio_data = general_purpose::STANDARD
         .decode(&base64_data)
@@ -45,11 +46,15 @@ pub async fn save_audio_file(
         })?;
 
     let file_path = dir_path.join(&file_name);
-    fs::write(&file_path, audio_data)
-        .map_err(|e| {
-            log_critical!("AudioManager", "Failed to write file {:?}: {}", file_path, e);
-            format!("Failed to write file {:?}: {}", file_path, e)
-        })?;
+    fs::write(&file_path, audio_data).map_err(|e| {
+        log_critical!(
+            "AudioManager",
+            "Failed to write file {:?}: {}",
+            file_path,
+            e
+        );
+        format!("Failed to write file {:?}: {}", file_path, e)
+    })?;
 
     log_info!("AudioManager", "Saved audio file: {:?}", file_path);
     Ok(())

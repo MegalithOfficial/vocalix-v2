@@ -75,7 +75,13 @@ impl Logger {
         self.log_file_path = path;
     }
 
-    pub fn log(&mut self, level: LogLevel, component: &str, message: &str, context: Option<HashMap<String, serde_json::Value>>) {
+    pub fn log(
+        &mut self,
+        level: LogLevel,
+        component: &str,
+        message: &str,
+        context: Option<HashMap<String, serde_json::Value>>,
+    ) {
         let entry = LogEntry {
             timestamp: Utc::now(),
             level: level.clone(),
@@ -87,7 +93,7 @@ impl Logger {
         let color = level.to_color_code();
         let reset = "\x1b[0m";
         let timestamp_str = entry.timestamp.format("%Y-%m-%d %H:%M:%S%.3f UTC");
-        
+
         match level {
             LogLevel::Error | LogLevel::Critical => {
                 eprintln!(
@@ -189,7 +195,12 @@ pub fn clear_logs() {
     }
 }
 
-pub fn log_with_context(level: LogLevel, component: &str, message: &str, context: Option<HashMap<String, serde_json::Value>>) {
+pub fn log_with_context(
+    level: LogLevel,
+    component: &str,
+    message: &str,
+    context: Option<HashMap<String, serde_json::Value>>,
+) {
     if let Some(logger) = LOGGER.get() {
         if let Ok(mut logger) = logger.lock() {
             logger.log(level, component, message, context);

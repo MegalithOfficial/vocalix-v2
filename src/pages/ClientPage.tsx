@@ -164,6 +164,7 @@ interface RedemptionData {
    filePath: string;
    timerDuration?: number;
    receivedAt: Date;
+   source?: 'twitch' | 'server';
 }
 
 interface TimerData {
@@ -367,6 +368,73 @@ const ClientPage = () => {
       }
    };
 
+   const handleIncomingTts = async (rawPayload: any, source: 'twitch' | 'server') => {
+      let parsedData = rawPayload;
+
+      if (typeof rawPayload === 'string') {
+         try {
+            parsedData = JSON.parse(rawPayload);
+         } catch (error) {
+            console.error('Failed to parse incoming payload:', error);
+            addLog('error', 'Failed to parse incoming audio payload');
+            return;
+         }
+      }
+
+      const redemption: RedemptionData = {
+         id: parsedData.id || `incoming_${Date.now()}`,
+         title:
+            parsedData.title || (source === 'server' ? 'Server Message' : 'Unknown Redemption'),
+         content: parsedData.content || parsedData.message || '',
+         filePath: parsedData.filePath || parsedData.file_path || '',
+         audioData:
+            parsedData.audioData || parsedData.audio_base64 || parsedData.audioBase64 || '',
+         timerDuration: parsedData.timerDuration ?? parsedData.timer_duration ?? parsedData.time,
+         receivedAt: new Date(),
+         source,
+      };
+
+      setLatestRedemption(redemption);
+      addLog(
+         'success',
+         source === 'server'
+            ? `Server message received: ${redemption.title}`
+            : `Redemption received: ${redemption.title}`
+      );
+
+      if (redemption.timerDuration && redemption.timerDuration > 0) {
+         const timerId = `timer_${Date.now()}_${redemption.id}`;
+         setActiveTimers(prev => ({
+            ...prev,
+            [timerId]: {
+               id: timerId,
+               title: redemption.title,
+               content: redemption.content,
+               userName: parsedData.userName || (source === 'server' ? 'Server' : 'Unknown'),
+               totalDuration: redemption.timerDuration!,
+               remainingTime: redemption.timerDuration!,
+               startedAt: new Date(),
+            },
+         }));
+         addLog('info', `Timer started: ${redemption.timerDuration}s for "${redemption.title}"`);
+      }
+
+      if (redemption.audioData && typeof redemption.audioData === 'string' && redemption.audioData.trim() !== '') {
+         const clean = redemption.audioData.includes(',')
+            ? redemption.audioData.split(',')[1]
+            : redemption.audioData;
+         let mime: string = parsedData.mimeType || 'audio/mpeg';
+         if (!parsedData.mimeType && clean) {
+            if (clean.startsWith('UklG')) mime = 'audio/wav';
+            else if (clean.startsWith('SUQz')) mime = 'audio/mpeg';
+            else if (clean.startsWith('T2dn')) mime = 'audio/ogg';
+         }
+         await playAudio(redemption.audioData, mime);
+      } else if (redemption.filePath) {
+         await playAudio(redemption.filePath);
+      }
+   };
+
    const stopAudio = () => {
       const audioElement = document.getElementById('main-audio') as HTMLAudioElement;
       if (audioElement) {
@@ -504,64 +572,14 @@ const ClientPage = () => {
 
       const unlistenRedemption = listen('REDEMPTION_RECEIVED', async (event) => {
          if (!isMountedRef.current) return;
-         const redemptionData = event.payload as any;
-         console.log('Redemption received:', redemptionData);
+         console.log('Redemption received:', event.payload);
+         await handleIncomingTts(event.payload, 'twitch');
+      });
 
-         let parsedData = redemptionData;
-         if (typeof redemptionData === 'string') {
-            try {
-               parsedData = JSON.parse(redemptionData);
-            } catch (error) {
-               console.error('Failed to parse redemption data:', error);
-               addLog('error', 'Failed to parse redemption data');
-               return;
-            }
-         }
-
-
-         const redemption: RedemptionData = {
-            id: parsedData.id || `redemption_${Date.now()}`,
-            title: parsedData.title || 'Unknown Redemption',
-            content: parsedData.content || '',
-            filePath: parsedData.filePath || parsedData.file_path || '',
-            audioData: parsedData.audioData || parsedData.audio_base64 || parsedData.audioBase64 || '',
-            timerDuration: parsedData.timerDuration ?? parsedData.timer_duration ?? parsedData.time,
-            receivedAt: new Date()
-         };
-
-         setLatestRedemption(redemption);
-         addLog('success', `Redemption received: ${redemption.title}`);
-
-         if (redemption.timerDuration && redemption.timerDuration > 0) {
-            const timerId = `timer_${Date.now()}_${redemption.id}`;
-            setActiveTimers(prev => ({
-               ...prev,
-               [timerId]: {
-                  id: timerId,
-                  title: redemption.title,
-                  content: redemption.content,
-                  userName: parsedData.userName || 'Server',
-                  totalDuration: redemption.timerDuration!,
-                  remainingTime: redemption.timerDuration!,
-                  startedAt: new Date()
-               }
-            }));
-            addLog('info', `Timer started: ${redemption.timerDuration}s for "${redemption.title}"`);
-         }
-
-
-         if (redemption.audioData && typeof redemption.audioData === 'string' && redemption.audioData.trim() !== '') {
-            const clean = redemption.audioData.includes(',') ? redemption.audioData.split(',')[1] : redemption.audioData;
-            let mime: string = parsedData.mimeType || 'audio/mpeg';
-            if (!parsedData.mimeType && clean) {
-               if (clean.startsWith('UklG')) mime = 'audio/wav';
-               else if (clean.startsWith('SUQz')) mime = 'audio/mpeg';
-               else if (clean.startsWith('T2dn')) mime = 'audio/ogg';
-            }
-            await playAudio(redemption.audioData, mime);
-         } else if (redemption.filePath) {
-            await playAudio(redemption.filePath);
-         }
+      const unlistenServerMessage = listen('SERVER_MESSAGE_RECEIVED', async (event) => {
+         if (!isMountedRef.current) return;
+         console.log('Server message received:', event.payload);
+         await handleIncomingTts(event.payload, 'server');
       });
 
       const unlistenError = listen('ERROR', (event) => {
@@ -613,6 +631,7 @@ const ClientPage = () => {
          unlistenClientDisconnected.then(f => f());
          unlistenPeerDisconnect.then(f => f());
          unlistenRedemption.then(f => f());
+         unlistenServerMessage.then(f => f());
          unlistenError.then(f => f());
       };
    }, []);
@@ -1230,6 +1249,19 @@ const ClientPage = () => {
                            {latestRedemption ? (
                               <div className="bg-gradient-to-br from-gray-800/70 to-gray-900/70 border border-gray-700/50 rounded-2xl p-10 shadow-lg relative">
                                  <div className="absolute top-4 right-4 flex items-center gap-2 text-xs text-gray-400">
+                                    {latestRedemption.source && (
+                                       <span
+                                          className={`px-2 py-0.5 rounded-full border font-semibold ${
+                                             latestRedemption.source === 'server'
+                                                ? 'bg-purple-500/20 text-purple-200 border-purple-500/30'
+                                                : 'bg-blue-500/20 text-blue-200 border-blue-500/30'
+                                          }`}
+                                       >
+                                          {latestRedemption.source === 'server'
+                                             ? 'Server Message'
+                                             : 'Twitch Redemption'}
+                                       </span>
+                                    )}
                                     <span>{latestRedemption.receivedAt.toLocaleTimeString()}</span>
                                  </div>
                                  <h2 className="text-4xl md:text-5xl font-extrabold tracking-tight text-white mb-6 text-center break-words">

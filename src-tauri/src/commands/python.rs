@@ -1,5 +1,5 @@
-use crate::{log_info, log_warn, log_error, log_debug, log_critical};
 use crate::helpers::create_hidden_command;
+use crate::{log_critical, log_debug, log_error, log_info, log_warn};
 use tauri::{AppHandle, Emitter, Manager, Window};
 
 #[tauri::command]
@@ -13,27 +13,21 @@ pub async fn save_pth_model(
 
     log_debug!("ModelManager", "Saving PTH model: {}", file_name);
 
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| {
-            log_error!("ModelManager", "Failed to get app data directory: {}", e);
-            format!("Failed to get app data directory: {}", e)
-        })?;
+    let app_data_dir = app.path().app_data_dir().map_err(|e| {
+        log_error!("ModelManager", "Failed to get app data directory: {}", e);
+        format!("Failed to get app data directory: {}", e)
+    })?;
 
     let model_dir = app_data_dir.join("pythonenv").join("models");
-    fs::create_dir_all(&model_dir)
-        .map_err(|e| {
-            log_error!("ModelManager", "Failed to create model directory: {}", e);
-            format!("Failed to create model directory: {}", e)
-        })?;
+    fs::create_dir_all(&model_dir).map_err(|e| {
+        log_error!("ModelManager", "Failed to create model directory: {}", e);
+        format!("Failed to create model directory: {}", e)
+    })?;
 
-    let file_data = Base64Engine
-        .decode(&base64_data)
-        .map_err(|e| {
-            log_error!("ModelManager", "Failed to decode base64 data: {}", e);
-            format!("Failed to decode base64 data: {}", e)
-        })?;
+    let file_data = Base64Engine.decode(&base64_data).map_err(|e| {
+        log_error!("ModelManager", "Failed to decode base64 data: {}", e);
+        format!("Failed to decode base64 data: {}", e)
+    })?;
 
     let file_path = model_dir.join(&file_name);
     fs::write(&file_path, file_data).map_err(|e| {
@@ -359,7 +353,6 @@ pub async fn setup_python_environment(
 
 #[tauri::command]
 pub async fn check_environment_status(app: AppHandle) -> Result<serde_json::Value, String> {
-
     log_info!("PythonEnvironment", "Checking environment status...");
 
     let app_data_dir = app
@@ -385,7 +378,10 @@ pub async fn check_environment_status(app: AppHandle) -> Result<serde_json::Valu
         pythonenv_path.join("bin").join("python")
     };
 
-    let python_version = match create_hidden_command(&python_path).arg("--version").output() {
+    let python_version = match create_hidden_command(&python_path)
+        .arg("--version")
+        .output()
+    {
         Ok(output) => {
             if output.status.success() {
                 let version_output = String::from_utf8_lossy(&output.stdout);
@@ -462,7 +458,6 @@ async fn get_library_versions_internal_with_path(
     pythonenv_path: &std::path::Path,
 ) -> Result<serde_json::Value, String> {
     use std::fs;
-    
 
     let python_path = if cfg!(windows) {
         pythonenv_path.join("Scripts").join("python.exe")
@@ -511,8 +506,6 @@ print(json.dumps({"rvc-python":v("rvc-python","rvc"),"edge-tts":v("edge-tts","ed
 
 #[tauri::command]
 pub async fn check_python_version(app: AppHandle) -> Result<String, String> {
-    
-
     log_info!("PythonEnvironment", "Checking Python version...");
 
     let python_command = if cfg!(windows) { "python" } else { "python3" };
@@ -533,7 +526,9 @@ pub async fn check_python_version(app: AppHandle) -> Result<String, String> {
         std::path::PathBuf::from(python_command)
     };
 
-    let version_check = create_hidden_command(&python_path).arg("--version").output();
+    let version_check = create_hidden_command(&python_path)
+        .arg("--version")
+        .output();
 
     match version_check {
         Ok(output) => {
@@ -557,7 +552,9 @@ pub async fn check_python_version(app: AppHandle) -> Result<String, String> {
                         "Virtual environment Python failed, trying system Python..."
                     );
 
-                    let system_check = create_hidden_command(python_command).arg("--version").output();
+                    let system_check = create_hidden_command(python_command)
+                        .arg("--version")
+                        .output();
 
                     match system_check {
                         Ok(output) => {
@@ -583,7 +580,9 @@ pub async fn check_python_version(app: AppHandle) -> Result<String, String> {
                     "Virtual environment Python failed, trying system Python..."
                 );
 
-                let system_check = create_hidden_command(python_command).arg("--version").output();
+                let system_check = create_hidden_command(python_command)
+                    .arg("--version")
+                    .output();
 
                 match system_check {
                     Ok(output) => {
@@ -619,7 +618,6 @@ pub async fn check_library_versions(app: AppHandle) -> Result<serde_json::Value,
 #[tauri::command]
 pub async fn get_available_devices(app: AppHandle) -> Result<serde_json::Value, String> {
     use std::fs;
-    
 
     log_info!("PythonEnvironment", "Getting available devices...");
 
@@ -684,8 +682,6 @@ pub async fn force_reinstall_libraries(
     app: AppHandle,
     window: tauri::Window,
 ) -> Result<String, String> {
-    
-
     log_info!(
         "PythonEnvironment",
         "Force reinstalling Python libraries..."
@@ -751,7 +747,9 @@ pub async fn force_reinstall_libraries(
         }),
     );
 
-    let _ = create_hidden_command(&pip_path).args(["cache", "purge"]).output();
+    let _ = create_hidden_command(&pip_path)
+        .args(["cache", "purge"])
+        .output();
 
     let _ = window.emit(
         "PYTHON_SETUP_PROGRESS",
@@ -818,7 +816,12 @@ pub async fn force_reinstall_libraries(
     );
 
     let install_result = create_hidden_command(&pip_path)
-        .args(["install", "--force-reinstall", "--no-cache-dir", "rvc-python"])
+        .args([
+            "install",
+            "--force-reinstall",
+            "--no-cache-dir",
+            "rvc-python",
+        ])
         .output();
 
     match install_result {
@@ -829,7 +832,10 @@ pub async fn force_reinstall_libraries(
             }
         }
         Err(e) => {
-            return Err(format!("Failed to execute pip install for rvc-python: {}", e));
+            return Err(format!(
+                "Failed to execute pip install for rvc-python: {}",
+                e
+            ));
         }
     }
 
@@ -850,7 +856,6 @@ pub async fn delete_python_environment(
     window: tauri::Window,
 ) -> Result<String, String> {
     use std::fs;
-    
 
     log_info!("PythonEnvironment", "Deleting Python environment...");
 
@@ -873,9 +878,15 @@ pub async fn delete_python_environment(
         if let Err(e) = fs::remove_dir_all(&pythonenv_path) {
             return Err(format!("Failed to remove existing environment: {}", e));
         }
-        log_info!("PythonEnvironment", "Python environment deleted successfully");
+        log_info!(
+            "PythonEnvironment",
+            "Python environment deleted successfully"
+        );
     } else {
-        log_info!("PythonEnvironment", "Python environment directory does not exist");
+        log_info!(
+            "PythonEnvironment",
+            "Python environment directory does not exist"
+        );
     }
 
     let _ = window.emit(
@@ -895,7 +906,6 @@ pub async fn reset_python_environment(
     window: tauri::Window,
 ) -> Result<String, String> {
     use std::fs;
-    
 
     log_info!("PythonEnvironment", "Resetting Python environment...");
 
@@ -962,7 +972,9 @@ pub async fn reset_python_environment(
         }),
     );
 
-    let install_result = create_hidden_command(&pip_path).args(["install", "edge-tts"]).output();
+    let install_result = create_hidden_command(&pip_path)
+        .args(["install", "edge-tts"])
+        .output();
     match install_result {
         Ok(output) => {
             if !output.status.success() {
@@ -1013,7 +1025,9 @@ pub async fn reset_python_environment(
         }),
     );
 
-    let install_result = create_hidden_command(&pip_path).args(["install", "rvc-python"]).output();
+    let install_result = create_hidden_command(&pip_path)
+        .args(["install", "rvc-python"])
+        .output();
     match install_result {
         Ok(output) => {
             if !output.status.success() {
@@ -1022,7 +1036,10 @@ pub async fn reset_python_environment(
             }
         }
         Err(e) => {
-            return Err(format!("Failed to execute pip install for rvc-python: {}", e));
+            return Err(format!(
+                "Failed to execute pip install for rvc-python: {}",
+                e
+            ));
         }
     }
 
@@ -1049,7 +1066,7 @@ pub async fn validate_server_requirements(app: AppHandle) -> Result<serde_json::
         .path()
         .app_data_dir()
         .map_err(|e| format!("Failed to get app data directory: {}", e))?;
-    
+
     let pythonenv = app_data_dir.join("pythonenv");
     let python_exe = if cfg!(windows) {
         pythonenv.join("Scripts").join("python.exe")
@@ -1104,17 +1121,26 @@ pub async fn validate_server_requirements(app: AppHandle) -> Result<serde_json::
 
     match crate::commands::tts::load_tts_settings(app.clone()).await {
         Ok(tts_config) => {
-            let tts_mode = tts_config.get("ttsMode").and_then(|v| v.as_str()).unwrap_or("normal");
-            
+            let tts_mode = tts_config
+                .get("ttsMode")
+                .and_then(|v| v.as_str())
+                .unwrap_or("normal");
+
             if tts_mode == "rvc" {
-                let selected_model = tts_config.get("selectedModel").and_then(|v| v.as_str()).unwrap_or("");
-                
+                let selected_model = tts_config
+                    .get("selectedModel")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
                 if selected_model.is_empty() {
-                    validation_result["warnings"].as_array_mut().unwrap().push(serde_json::json!({
-                        "type": "rvc_model_not_selected",
-                        "message": "RVC mode is enabled but no model is selected.",
-                        "action": "Go to Settings → Text to Speech to select an RVC model."
-                    }));
+                    validation_result["warnings"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(serde_json::json!({
+                            "type": "rvc_model_not_selected",
+                            "message": "RVC mode is enabled but no model is selected.",
+                            "action": "Go to Settings → Text to Speech to select an RVC model."
+                        }));
                 } else {
                     let model_path = pythonenv.join("models").join(selected_model);
                     if !model_path.exists() {
@@ -1129,11 +1155,14 @@ pub async fn validate_server_requirements(app: AppHandle) -> Result<serde_json::
             }
         }
         Err(_) => {
-            validation_result["warnings"].as_array_mut().unwrap().push(serde_json::json!({
-                "type": "tts_config_missing",
-                "message": "TTS configuration not found. Using default settings.",
-                "action": "Go to Settings → Text to Speech to configure TTS settings."
-            }));
+            validation_result["warnings"]
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!({
+                    "type": "tts_config_missing",
+                    "message": "TTS configuration not found. Using default settings.",
+                    "action": "Go to Settings → Text to Speech to configure TTS settings."
+                }));
         }
     }
 

@@ -20,7 +20,7 @@ use tokio::sync::{broadcast, Mutex};
 
 fn main() {
     crate::logging::init_logger("logs/vocalix.log".to_string());
-    
+
     log_info!("Application", "Starting Vocalix v2...");
 
     let identity =
@@ -57,19 +57,24 @@ fn main() {
         .manage(logging_state)
         .setup(|app| {
             log_info!("Application", "Setting up Tauri application");
-            
+
             crate::logging::set_app_handle(app.handle().clone());
-            
+
             if let Ok(app_data_dir) = app.path().app_data_dir() {
                 let logs_dir = app_data_dir.join("logs");
                 if let Err(e) = std::fs::create_dir_all(&logs_dir) {
-                    log_error!("Application", "Failed to create logs directory {:?}: {}", logs_dir, e);
+                    log_error!(
+                        "Application",
+                        "Failed to create logs directory {:?}: {}",
+                        logs_dir,
+                        e
+                    );
                 } else {
                     let log_file_path = logs_dir.join("vocalix.log");
                     log_info!("Application", "Log file path set to: {:?}", log_file_path);
-                    
+
                     crate::logging::set_log_file_path(log_file_path.to_string_lossy().to_string());
-                    
+
                     if let Some(logging_state) = app.try_state::<LoggingState>() {
                         if let Ok(mut path) = logging_state.log_file_path.lock() {
                             *path = log_file_path.to_string_lossy().to_string();
@@ -77,12 +82,15 @@ fn main() {
                     }
                 }
             } else {
-                log_warn!("Application", "Failed to get app data directory, using relative logs path");
+                log_warn!(
+                    "Application",
+                    "Failed to get app data directory, using relative logs path"
+                );
                 if let Err(e) = std::fs::create_dir_all("logs") {
                     log_error!("Application", "Failed to create logs directory: {}", e);
                 }
             }
-            
+
             #[allow(unused_variables)]
             {
                 if let Ok(store) = app.store("settings.json") {
@@ -96,12 +104,18 @@ fn main() {
                     log_info!("Application", "Client-only mode: {}", only_client_mode);
                     let _ = app.emit("CLIENT_ONLY_MODE", only_client_mode);
                 } else {
-                    log_warn!("Application", "Could not load settings store, defaulting to full mode");
+                    log_warn!(
+                        "Application",
+                        "Could not load settings store, defaulting to full mode"
+                    );
                     let _ = app.emit("CLIENT_ONLY_MODE", false);
                 }
             }
-            
-            log_info!("Application", "Tauri application setup completed successfully");
+
+            log_info!(
+                "Application",
+                "Tauri application setup completed successfully"
+            );
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -118,6 +132,7 @@ fn main() {
             commands::p2p::send_chat_message,
             commands::p2p::send_redemption_without_timer,
             commands::p2p::send_redemption_with_timer,
+            commands::p2p::send_server_message,
             commands::twitch::twitch_authenticate,
             commands::twitch::twitch_start_event_listener,
             commands::twitch::twitch_stop_event_listener,
@@ -168,6 +183,9 @@ fn main() {
             log_critical!("Application", "Failed to run Tauri application: {}", err);
             panic!("error while running tauri application: {}", err);
         });
-    
-    log_info!("Application", "Vocalix v2 application terminated gracefully");
+
+    log_info!(
+        "Application",
+        "Vocalix v2 application terminated gracefully"
+    );
 }

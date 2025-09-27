@@ -60,6 +60,17 @@ const ServerPage = () => {
   const [isClientConnected, setIsClientConnected] = useState(false);
   const [pairingCode, setPairingCode] = useState<string | null>(null);
   const [generatedTTS, setGeneratedTTS] = useState<Record<string, {filePath: string, title: string, content: string, timerDuration?: number}>>({});
+  const [manualTtsTitle, setManualTtsTitle] = useState('');
+  const [manualTtsText, setManualTtsText] = useState('');
+  const [manualTtsStatus, setManualTtsStatus] = useState<'idle' | 'generating' | 'ready' | 'sending' | 'error'>('idle');
+  const [manualTtsError, setManualTtsError] = useState<string | null>(null);
+  const [manualTtsResult, setManualTtsResult] = useState<{
+    filePath: string;
+    title: string;
+    content: string;
+    audioBase64?: string;
+    mimeType?: string;
+  } | null>(null);
   
   const [activeTimers, setActiveTimers] = useState<Record<string, {
     id: string;
@@ -78,6 +89,22 @@ const ServerPage = () => {
     const timestamp = new Date().toLocaleTimeString();
     setServerLogs(prev => [...prev.slice(-9), { type, message, timestamp }]); 
   };
+
+  const isManualTtsProcessing = manualTtsStatus === 'generating' || manualTtsStatus === 'sending';
+  const manualTtsStatusStyles = (() => {
+    switch (manualTtsStatus) {
+      case 'generating':
+        return { label: 'Generating audio…', classes: 'bg-blue-500/20 text-blue-300 border border-blue-500/30' };
+      case 'sending':
+        return { label: 'Sending to client…', classes: 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30' };
+      case 'ready':
+        return { label: 'Ready to send', classes: 'bg-green-500/20 text-green-300 border border-green-500/30' };
+      case 'error':
+        return { label: 'Needs attention', classes: 'bg-red-500/20 text-red-300 border border-red-500/30' };
+      default:
+        return { label: 'Idle', classes: 'bg-gray-500/20 text-gray-300 border border-gray-500/30' };
+    }
+  })();
 
   useEffect(() => {
     if (autoScroll && logsContainerRef.current) {
@@ -557,6 +584,105 @@ const ServerPage = () => {
     }
   };
 
+  const handleGenerateManualTts = async () => {
+    const trimmedMessage = manualTtsText.trim();
+    const trimmedTitle = manualTtsTitle.trim();
+
+    if (!trimmedMessage) {
+      setManualTtsError('Enter a message to convert into speech.');
+      return;
+    }
+
+    setManualTtsStatus('generating');
+    setManualTtsError(null);
+    setManualTtsResult(null);
+
+    try {
+      const ttsSettings = await invoke('load_tts_settings') as any;
+      const isRvcMode = ttsSettings?.ttsMode === 'rvc';
+
+      let ttsResult: any;
+      if (isRvcMode) {
+        ttsResult = await invoke('generate_tts', {
+          mode: 'rvc',
+          text: trimmedMessage,
+          voice: ttsSettings?.ttsVoice || 'en-US-JennyNeural',
+          modelFile: ttsSettings?.selectedModel,
+          device: ttsSettings?.rvcSettings?.device || 'cpu',
+          inferenceRate: ttsSettings?.rvcSettings?.inferenceRate || 0.75,
+          filterRadius: ttsSettings?.rvcSettings?.filterRadius || 3,
+          resampleRate: ttsSettings?.rvcSettings?.resampleRate || 0.25,
+          protectRate: ttsSettings?.rvcSettings?.protectRate || 0.5
+        });
+      } else {
+        ttsResult = await invoke('generate_tts', {
+          mode: 'normal',
+          text: trimmedMessage,
+          voice: ttsSettings?.ttsVoice || 'en-US-JennyNeural'
+        });
+      }
+
+      if (!ttsResult || !(ttsResult as any).path) {
+        throw new Error('TTS generation failed - no audio path returned');
+      }
+
+      const manualResult = {
+        filePath: (ttsResult as any).path as string,
+        title: trimmedTitle || 'Server Message',
+        content: trimmedMessage,
+        audioBase64: (ttsResult as any).audio_data as string | undefined,
+        mimeType: (ttsResult as any).mime_type as string | undefined,
+      };
+
+      setManualTtsResult(manualResult);
+      setManualTtsStatus('ready');
+      addServerLog('success', `Manual TTS generated for "${manualResult.title}"`);
+    } catch (err) {
+      console.error('Failed to generate manual TTS:', err);
+      const message = (err as Error)?.message || String(err);
+      setManualTtsStatus('error');
+      setManualTtsError(message);
+      addServerLog('error', `Failed to generate manual TTS: ${message}`);
+    }
+  };
+
+  const handleSendManualTts = async () => {
+    if (!manualTtsResult) {
+      setManualTtsError('Generate TTS before sending.');
+      return;
+    }
+
+    setManualTtsStatus('sending');
+    setManualTtsError(null);
+
+    try {
+      await invoke('send_server_message', {
+        filePath: manualTtsResult.filePath,
+        audioBase64: manualTtsResult.audioBase64 ?? null,
+        title: manualTtsResult.title,
+        content: manualTtsResult.content,
+      });
+
+      addServerLog('success', `Server message sent to client: "${manualTtsResult.title}"`);
+      setManualTtsStatus('idle');
+      setManualTtsResult(null);
+    } catch (err) {
+      console.error('Failed to send server message:', err);
+      const message = (err as Error)?.message || String(err);
+      setManualTtsStatus('ready');
+      setManualTtsError(message);
+      addServerLog('error', `Failed to send server message: ${message}`);
+    }
+  };
+
+  const resetManualTts = () => {
+    setManualTtsTitle('');
+    setManualTtsText('');
+    setManualTtsStatus('idle');
+    setManualTtsError(null);
+    setManualTtsResult(null);
+  };
+
   const handleRejectRedemption = (redemption: RedemptionRequest) => {
     setRedemptionRequests(prev => prev.filter(r => r.id !== redemption.id));
     addServerLog('info', `Rejected redemption from ${redemption.user_name}`);
@@ -973,10 +1099,150 @@ const ServerPage = () => {
                   })
                 )}
               </div>
-            </motion.div>
+          </motion.div>
+        </div>
+
+        {/* Manual Server Message */}
+        <motion.div
+          initial={{ y: 20, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          transition={{ duration: 0.5, delay: 0.15 }}
+          className="bg-gray-800/40 border border-gray-700/40 rounded-2xl p-6 mb-8"
+        >
+          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between mb-6">
+            <div className="flex items-start gap-3">
+              <div className="p-3 rounded-xl bg-purple-500/20 border border-purple-500/30">
+                <MessageSquare className="w-5 h-5 text-purple-300" />
+              </div>
+              <div>
+                <h3 className="text-xl font-semibold text-white">Manual Server Message</h3>
+                <p className="text-sm text-gray-400">
+                  Convert any message into speech and deliver it instantly to the connected client.
+                </p>
+              </div>
+            </div>
+            <div className={`px-3 py-1 rounded-full text-xs font-semibold ${manualTtsStatusStyles.classes}`}>
+              {manualTtsStatusStyles.label}
+            </div>
           </div>
 
-          {/* Redemptions and Logs Row */}
+          {manualTtsError && (
+            <div className="mb-4 p-3 rounded-lg border border-red-500/30 bg-red-500/10 text-red-200 text-sm">
+              {manualTtsError}
+            </div>
+          )}
+
+          <div className="grid gap-6 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-300 mb-2">
+                  Display Title <span className="text-gray-500">(optional)</span>
+                </label>
+                <input
+                  value={manualTtsTitle}
+                  onChange={(event) => setManualTtsTitle(event.target.value)}
+                  placeholder="Server Message"
+                  className="w-full rounded-lg border border-gray-600/50 bg-black/30 px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-purple-500/40"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-300 mb-2">Message</label>
+                <textarea
+                  value={manualTtsText}
+                  onChange={(event) => setManualTtsText(event.target.value)}
+                  rows={4}
+                  maxLength={500}
+                  placeholder="Type the message you want to convert to speech…"
+                  className="w-full rounded-lg border border-gray-600/50 bg-black/30 px-3 py-3 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-purple-500/40 resize-none"
+                />
+                <div className="mt-2 text-xs text-gray-500 flex justify-between">
+                  <span>{manualTtsText.trim().length} / 500 characters</span>
+                  {manualTtsStatus === 'ready' && manualTtsResult && (
+                    <span className="text-green-300">Audio ready</span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              {manualTtsResult && (
+                <div className="rounded-lg border border-green-500/30 bg-green-500/10 p-3 text-xs text-green-200">
+                  <div className="font-semibold text-sm text-green-100 mb-1">{manualTtsResult.title}</div>
+                  <p className="text-xs text-green-200/80 line-clamp-2">{manualTtsResult.content}</p>
+                  {!isClientConnected && (
+                    <p className="mt-2 text-xs text-yellow-200/80">
+                      Client not connected — connect a client to send the audio.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              <div className="flex flex-col gap-2">
+                <motion.button
+                  whileHover={!isManualTtsProcessing ? { scale: 1.02 } : undefined}
+                  whileTap={!isManualTtsProcessing ? { scale: 0.98 } : undefined}
+                  onClick={handleGenerateManualTts}
+                  disabled={isManualTtsProcessing}
+                  className={`flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
+                    isManualTtsProcessing
+                      ? 'bg-purple-600/40 text-white/80 cursor-not-allowed'
+                      : 'bg-purple-600 hover:bg-purple-500 text-white'
+                  }`}
+                >
+                  {manualTtsStatus === 'generating' ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      Generating…
+                    </>
+                  ) : (
+                    <>
+                      <MessageSquare className="w-4 h-4" />
+                      Generate TTS
+                    </>
+                  )}
+                </motion.button>
+
+                <motion.button
+                  whileHover={manualTtsStatus === 'ready' && isClientConnected ? { scale: 1.02 } : undefined}
+                  whileTap={manualTtsStatus === 'ready' && isClientConnected ? { scale: 0.98 } : undefined}
+                  onClick={handleSendManualTts}
+                  disabled={!manualTtsResult || manualTtsStatus === 'sending' || !isClientConnected}
+                  className={`flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
+                    !manualTtsResult || !isClientConnected
+                      ? 'bg-gray-600/40 text-gray-300 cursor-not-allowed'
+                      : manualTtsStatus === 'sending'
+                      ? 'bg-cyan-600/40 text-white'
+                      : 'bg-cyan-600 hover:bg-cyan-500 text-white'
+                  }`}
+                >
+                  {manualTtsStatus === 'sending' ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      Sending…
+                    </>
+                  ) : (
+                    <>
+                      <ArrowDownCircle className="w-4 h-4" />
+                      Send to Client
+                    </>
+                  )}
+                </motion.button>
+
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={resetManualTts}
+                  className="flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium border border-gray-600/50 text-gray-200 hover:bg-gray-700/40"
+                >
+                  <X className="w-4 h-4" />
+                  Clear
+                </motion.button>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+
+        {/* Redemptions and Logs Row */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
             {/* Redemptions List */}
             <motion.div

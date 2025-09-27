@@ -5,7 +5,6 @@ use reqwest;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-
 const TWITCH_DEVICE_URL: &str = "https://id.twitch.tv/oauth2/device";
 const TWITCH_TOKEN_URL: &str = "https://id.twitch.tv/oauth2/token";
 const TWITCH_VALIDATE_URL: &str = "https://id.twitch.tv/oauth2/validate";
@@ -151,7 +150,7 @@ impl TwitchOAuth {
         println!("Polling for tokens...");
 
         let scopes_joined = self.config.scopes.join(" ");
-    let params = vec![
+        let params = vec![
             ("client_id", self.config.client_id.as_str()),
             ("client_secret", self.config.client_secret.as_str()),
             ("scopes", &scopes_joined),
@@ -248,7 +247,7 @@ impl TwitchOAuth {
     }
 
     pub async fn refresh_tokens(&self, refresh_token: &str) -> Result<TwitchTokens> {
-    let params = vec![
+        let params = vec![
             ("client_id", self.config.client_id.as_str()),
             ("client_secret", self.config.client_secret.as_str()),
             ("grant_type", "refresh_token"),
@@ -424,7 +423,9 @@ impl TwitchSecureStore {
     const TOKENS_KEY: &'static str = "oauth-tokens";
     const CREDS_KEY: &'static str = "client-credentials";
 
-    fn entry(key: &str) -> Result<Entry> { Entry::new(Self::SERVICE, key).map_err(|e| e.into()) }
+    fn entry(key: &str) -> Result<Entry> {
+        Entry::new(Self::SERVICE, key).map_err(|e| e.into())
+    }
 
     fn save_json<T: Serialize>(key: &str, value: &T) -> Result<()> {
         let json = serde_json::to_string(value)?;
@@ -443,15 +444,26 @@ impl TwitchSecureStore {
         Ok(())
     }
     fn exists(key: &str) -> bool {
-        if let Ok(entry) = Self::entry(key) { entry.get_password().is_ok() } else { false }
+        if let Ok(entry) = Self::entry(key) {
+            entry.get_password().is_ok()
+        } else {
+            false
+        }
     }
 
     // Tokens API
-    pub fn save_tokens(tokens: &TwitchTokens) -> Result<()> { Self::save_json(Self::TOKENS_KEY, tokens) }
-    pub fn load_tokens() -> Result<TwitchTokens> { Self::load_json(Self::TOKENS_KEY) }
-    pub fn delete_tokens() -> Result<()> { Self::delete(Self::TOKENS_KEY) }
-    pub fn tokens_exist() -> bool { Self::exists(Self::TOKENS_KEY) }
-
+    pub fn save_tokens(tokens: &TwitchTokens) -> Result<()> {
+        Self::save_json(Self::TOKENS_KEY, tokens)
+    }
+    pub fn load_tokens() -> Result<TwitchTokens> {
+        Self::load_json(Self::TOKENS_KEY)
+    }
+    pub fn delete_tokens() -> Result<()> {
+        Self::delete(Self::TOKENS_KEY)
+    }
+    pub fn tokens_exist() -> bool {
+        Self::exists(Self::TOKENS_KEY)
+    }
 
     // Credentials API
     pub fn save_credentials(client_id: &str, client_secret: &str) -> Result<()> {
@@ -463,12 +475,22 @@ impl TwitchSecureStore {
     }
     pub fn load_credentials() -> Result<(String, String)> {
         let v: serde_json::Value = Self::load_json(Self::CREDS_KEY)?;
-        let client_id = v["client_id"].as_str().ok_or_else(|| anyhow!("Invalid client_id in stored credentials"))?.to_string();
-        let client_secret = v["client_secret"].as_str().ok_or_else(|| anyhow!("Missing client_secret in stored credentials"))?.to_string();
+        let client_id = v["client_id"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Invalid client_id in stored credentials"))?
+            .to_string();
+        let client_secret = v["client_secret"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Missing client_secret in stored credentials"))?
+            .to_string();
         Ok((client_id, client_secret))
     }
-    pub fn delete_credentials() -> Result<()> { Self::delete(Self::CREDS_KEY) }
-    pub fn credentials_exist() -> bool { Self::exists(Self::CREDS_KEY) }
+    pub fn delete_credentials() -> Result<()> {
+        Self::delete(Self::CREDS_KEY)
+    }
+    pub fn credentials_exist() -> bool {
+        Self::exists(Self::CREDS_KEY)
+    }
 }
 
 #[derive(Clone)]
@@ -542,7 +564,7 @@ impl TwitchAuthManager {
         let mut tokens = TwitchSecureStore::load_tokens()
             .map_err(|_| anyhow!("No saved tokens found. Please authenticate first."))?;
 
-    let expires_soon = tokens.expires_at < (Utc::now() + chrono::Duration::seconds(60));
+        let expires_soon = tokens.expires_at < (Utc::now() + chrono::Duration::seconds(60));
 
         if expires_soon {
             if let Some(refresh_token) = &tokens.refresh_token {
@@ -566,7 +588,9 @@ impl TwitchAuthManager {
             Ok(v) => Ok(v),
             Err(e) => {
                 let msg = e.to_string();
-                if (msg.contains("invalid") || msg.contains("expired")) && tokens.refresh_token.is_some() {
+                if (msg.contains("invalid") || msg.contains("expired"))
+                    && tokens.refresh_token.is_some()
+                {
                     if let Some(refresh) = &tokens.refresh_token {
                         let refreshed = self.oauth.refresh_tokens(refresh).await?;
                         TwitchSecureStore::save_tokens(&refreshed)?;
@@ -683,7 +707,8 @@ mod tests {
 
     #[test]
     fn test_scope_validation() {
-    let auth_manager = TwitchAuthManager::new("test_client_id".to_string(), "test_secret".to_string());
+        let auth_manager =
+            TwitchAuthManager::new("test_client_id".to_string(), "test_secret".to_string());
         let scopes = &auth_manager.oauth.config.scopes;
 
         assert!(scopes.contains(&"channel:read:redemptions".to_string()));

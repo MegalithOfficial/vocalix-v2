@@ -25,10 +25,10 @@ pub struct SessionKeys {
 
     // Nonce sequencing
     pub send_nonce: Arc<Mutex<u64>>, // local send sequence (monotonic)
-    pub recv_nonce: Arc<Mutex<Option<u64>>>,  // highest received sequence
+    pub recv_nonce: Arc<Mutex<Option<u64>>>, // highest received sequence
 
     // Context binding
-    pub session_id: [u8; 16], // bound into AAD
+    pub session_id: [u8; 16],       // bound into AAD
     pub nonce_prefix_send: [u8; 4], // 12B nonce = prefix(4) || seq(8)
     pub nonce_prefix_recv: [u8; 4],
 
@@ -53,20 +53,26 @@ pub struct TwitchState {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Message {
     Hello(Vec<u8>),
-    Challenge { nonce: Vec<u8>, listener_pub_key: Vec<u8> },
+    Challenge {
+        nonce: Vec<u8>,
+        listener_pub_key: Vec<u8>,
+    },
     ChallengeResponse(Vec<u8>),
 
     InitialDhKey(Vec<u8>),
     ResponseDhKey(Vec<u8>),
 
-    PairingConfirmed, 
+    PairingConfirmed,
 
-    SessionKeyRequest(Vec<u8>), // my ephemeral public key (SEC1)
+    SessionKeyRequest(Vec<u8>),  // my ephemeral public key (SEC1)
     SessionKeyResponse(Vec<u8>), // peer ephemeral public key (SEC1)
 
     KeyConfirm(Vec<u8>),
 
-    EncryptedMessage { ciphertext: Vec<u8>, nonce: [u8; 12] },
+    EncryptedMessage {
+        ciphertext: Vec<u8>,
+        nonce: [u8; 12],
+    },
 
     RedemptionMessage {
         audio: Vec<u8>,
@@ -76,10 +82,18 @@ pub enum Message {
         time: Option<u32>, // seconds
     },
 
+    ServerMessage {
+        audio: Vec<u8>,
+        title: Option<String>,
+        content: String,
+    },
+
     PlaintextMessage(String),
 
     KeepAlive,
     KeepAliveAck,
 
-    Disconnect { reason: String },
+    Disconnect {
+        reason: String,
+    },
 }

@@ -1,10 +1,10 @@
 use crate::helpers::handle_twitch_event;
 use crate::services::twitch::{create_common_subscriptions, TwitchEventSub};
 use crate::services::twitch_oauth::TwitchAuthManager;
-use std::sync::Arc;
 use crate::state::TwitchState;
-use crate::{log_error, log_info, log_warn, log_debug, log_critical};
+use crate::{log_critical, log_debug, log_error, log_info, log_warn};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use tauri::{Emitter, State, Window};
 
 #[tauri::command]
@@ -29,22 +29,18 @@ pub async fn twitch_authenticate(
 
     let auth_manager = Arc::new(TwitchAuthManager::new(client_id, client_secret));
 
-
     match auth_manager.start_device_flow_async().await {
         Ok(device_response) => {
             log_debug!("TwitchAuth", "Device flow started successfully");
 
             *twitch_state.auth_manager.lock().await = Some(auth_manager.clone());
 
-
             let user_instructions = if device_response.verification_uri.contains("device-code=") {
- 
                 format!(
                     "Please visit {} to complete authentication",
                     device_response.verification_uri
                 )
             } else {
-       
                 format!(
                     "Please visit {} and enter code: {}",
                     device_response.verification_uri, device_response.user_code
@@ -79,29 +75,27 @@ pub async fn twitch_authenticate(
                     .complete_device_flow(&device_response_clone)
                     .await
                 {
-                    Ok(_tokens) => {
-                        match auth_manager_clone.get_user_info().await {
-                            Ok(user_info) => {
-                                window_clone
-                                    .emit("TWITCH_AUTH_SUCCESS", &user_info)
-                                    .unwrap();
-                                window_clone
-                                    .emit(
-                                        "STATUS_UPDATE",
-                                        format!(
-                                            "Successfully authenticated as {}",
-                                            user_info.display_name
-                                        ),
-                                    )
-                                    .unwrap();
-                            }
-                            Err(e) => {
-                                window_clone
-                                    .emit("ERROR", format!("Failed to get user info: {}", e))
-                                    .unwrap();
-                            }
+                    Ok(_tokens) => match auth_manager_clone.get_user_info().await {
+                        Ok(user_info) => {
+                            window_clone
+                                .emit("TWITCH_AUTH_SUCCESS", &user_info)
+                                .unwrap();
+                            window_clone
+                                .emit(
+                                    "STATUS_UPDATE",
+                                    format!(
+                                        "Successfully authenticated as {}",
+                                        user_info.display_name
+                                    ),
+                                )
+                                .unwrap();
                         }
-                    }
+                        Err(e) => {
+                            window_clone
+                                .emit("ERROR", format!("Failed to get user info: {}", e))
+                                .unwrap();
+                        }
+                    },
                     Err(e) => {
                         window_clone
                             .emit("ERROR", format!("Authentication polling failed: {}", e))
@@ -145,7 +139,10 @@ pub async fn twitch_start_event_listener(
         match guard.as_ref() {
             Some(m) => m.clone(),
             None => {
-                log_critical!("TwitchEventSub", "Attempted to start event listener without authentication");
+                log_critical!(
+                    "TwitchEventSub",
+                    "Attempted to start event listener without authentication"
+                );
                 return Err("Not authenticated with Twitch".to_string());
             }
         }
@@ -270,7 +267,7 @@ pub async fn twitch_sign_out(
             Err(e) => Err(format!("Failed to sign out: {}", e)),
         }
     } else {
-        Ok(()) 
+        Ok(())
     }
 }
 
@@ -367,7 +364,7 @@ pub async fn get_twitch_redemptions(
         .await
         .map_err(|e| format!("Failed to get user info: {}", e))?;
 
-    let broadcaster_id = user_info.id; 
+    let broadcaster_id = user_info.id;
 
     let tokens = auth_manager
         .get_valid_tokens()
