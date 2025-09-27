@@ -1,10 +1,10 @@
 import { motion } from 'framer-motion';
 import { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { 
-  ArrowLeft, 
-  Copy, 
-  CheckCircle, 
+import {
+  ArrowLeft,
+  Copy,
+  CheckCircle,
   AlertCircle,
   X,
   Check,
@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { RedemptionConfig, TimerBehavior } from '../types/settings';
 
 interface NetworkInfo {
   lan_ip: string;
@@ -42,6 +43,30 @@ interface RedemptionRequest {
   };
 }
 
+type TimerAdjustmentDescriptor =
+  | { kind: 'subtract'; seconds: number }
+  | { kind: 'clear' };
+
+type TimerActionDescriptor =
+  | { kind: 'none' }
+  | { kind: 'start'; durationSeconds: number }
+  | { kind: 'adjust'; adjustment: TimerAdjustmentDescriptor };
+
+type TimerActionPayload =
+  | { type: 'none' }
+  | { type: 'start'; duration_seconds: number }
+  | { type: 'adjust'; adjustment: { type: 'subtract'; seconds: number } | { type: 'clear' } };
+
+interface ActiveTimerEntry {
+  id: string;
+  title: string;
+  content: string;
+  userName: string;
+  totalDuration: number;
+  remainingTime: number;
+  startedAt: Date;
+}
+
 const ServerPage = () => {
   const navigate = useNavigate();
   const [isServerRunning, setIsServerRunning] = useState(false);
@@ -49,17 +74,17 @@ const ServerPage = () => {
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isEndingSession, setIsEndingSession] = useState(false);
-  
-  const [serverLogs, setServerLogs] = useState<Array<{type: 'info' | 'error' | 'success', message: string, timestamp: string}>>([]);
+
+  const [serverLogs, setServerLogs] = useState<Array<{ type: 'info' | 'error' | 'success', message: string, timestamp: string }>>([]);
 
   const [redemptionRequests, setRedemptionRequests] = useState<RedemptionRequest[]>([]);
   const [processingRedemptions, setProcessingRedemptions] = useState<Set<string>>(new Set());
   const [editingRedemptions, setEditingRedemptions] = useState<Record<string, string>>({});
-  const [redemptionConfigs, setRedemptionConfigs] = useState<Record<string, any>>({});
-  
+  const [redemptionConfigs, setRedemptionConfigs] = useState<Record<string, RedemptionConfig>>({});
+
   const [isClientConnected, setIsClientConnected] = useState(false);
   const [pairingCode, setPairingCode] = useState<string | null>(null);
-  const [generatedTTS, setGeneratedTTS] = useState<Record<string, {filePath: string, title: string, content: string, timerDuration?: number}>>({});
+  const [generatedTTS, setGeneratedTTS] = useState<Record<string, { filePath: string; title: string; content: string; timerAction: TimerActionDescriptor }>>({});
   const [manualTtsTitle, setManualTtsTitle] = useState('');
   const [manualTtsText, setManualTtsText] = useState('');
   const [manualTtsStatus, setManualTtsStatus] = useState<'idle' | 'generating' | 'ready' | 'sending' | 'error'>('idle');
@@ -71,16 +96,8 @@ const ServerPage = () => {
     audioBase64?: string;
     mimeType?: string;
   } | null>(null);
-  
-  const [activeTimers, setActiveTimers] = useState<Record<string, {
-    id: string;
-    title: string;
-    content: string;
-    userName: string;
-    totalDuration: number;
-    remainingTime: number;
-    startedAt: Date;
-  }>>({});
+
+  const [activeTimers, setActiveTimers] = useState<Record<string, ActiveTimerEntry>>({});
 
   const [autoScroll, setAutoScroll] = useState(true);
   const logsContainerRef = useRef<HTMLDivElement>(null);
@@ -105,6 +122,242 @@ const ServerPage = () => {
         return { label: 'Idle', classes: 'bg-gray-500/20 text-gray-300 border border-gray-500/30' };
     }
   })();
+
+  const timerBehaviorToDescriptor = (behavior?: TimerBehavior): TimerActionDescriptor => {
+    if (!behavior || behavior.mode === 'none') {
+      return { kind: 'none' };
+    }
+
+    if (behavior.mode === 'start') {
+      const seconds = parseTimeToSeconds(behavior.duration ?? '00:00');
+      if (seconds <= 0) {
+        return { kind: 'none' };
+      }
+      return { kind: 'start', durationSeconds: seconds };
+    }
+
+    if (behavior.mode === 'adjust') {
+      if (behavior.adjustment === 'clear') {
+        return { kind: 'adjust', adjustment: { kind: 'clear' } };
+      }
+
+      if (behavior.adjustment === 'subtract') {
+        const seconds = parseTimeToSeconds(behavior.amount ?? '00:00');
+        if (seconds <= 0) {
+          return { kind: 'none' };
+        }
+        return { kind: 'adjust', adjustment: { kind: 'subtract', seconds } };
+      }
+    }
+
+    return { kind: 'none' };
+  };
+
+  const descriptorToPayload = (descriptor: TimerActionDescriptor): TimerActionPayload => {
+    switch (descriptor.kind) {
+      case 'start':
+        return { type: 'start', duration_seconds: descriptor.durationSeconds };
+      case 'adjust':
+        if (descriptor.adjustment.kind === 'subtract') {
+          return {
+            type: 'adjust',
+            adjustment: { type: 'subtract', seconds: descriptor.adjustment.seconds },
+          };
+        }
+        return { type: 'adjust', adjustment: { type: 'clear' } };
+      default:
+        return { type: 'none' };
+    }
+  };
+
+  const describeTimerAction = (descriptor: TimerActionDescriptor): string | null => {
+    if (descriptor.kind === 'start') {
+      return `timer (${formatSecondsToTime(descriptor.durationSeconds)})`;
+    }
+    if (descriptor.kind === 'adjust') {
+      if (descriptor.adjustment.kind === 'clear') {
+        return 'timer clear';
+      }
+      return `timer adjustment (-${formatSecondsToTime(descriptor.adjustment.seconds)})`;
+    }
+    return null;
+  };
+
+  const renderTimerBehaviorBadge = (behavior: TimerBehavior) => {
+    if (behavior.mode === 'start') {
+      return (
+        <div className="flex items-center gap-1 px-2 py-1 bg-orange-500/20 text-orange-400 rounded text-xs">
+          <Clock className="w-3 h-3" />
+          {behavior.duration}
+        </div>
+      );
+    }
+
+    if (behavior.mode === 'adjust') {
+      if (behavior.adjustment === 'clear') {
+        return (
+          <div className="flex items-center gap-1 px-2 py-1 bg-red-500/20 text-red-300 rounded text-xs">
+            <Clock className="w-3 h-3" />
+            Clear Timers
+          </div>
+        );
+      }
+
+      const amount = behavior.amount || '00:30';
+      return (
+        <div className="flex items-center gap-1 px-2 py-1 bg-yellow-500/20 text-yellow-300 rounded text-xs">
+          <Clock className="w-3 h-3" />
+          -{amount}
+        </div>
+      );
+    }
+
+    return null;
+  };
+
+  const applyTimerActionLocally = (
+    descriptor: TimerActionDescriptor,
+    context: { baseId: string; title: string; content: string; userName: string }
+  ) => {
+    if (descriptor.kind === 'none') {
+      return;
+    }
+
+    if (descriptor.kind === 'start') {
+      const timerId = `timer_${Date.now()}_${context.baseId}`;
+      const totalDuration = descriptor.durationSeconds;
+      setActiveTimers(prev => ({
+        ...prev,
+        [timerId]: {
+          id: timerId,
+          title: context.title,
+          content: context.content,
+          userName: context.userName,
+          totalDuration,
+          remainingTime: totalDuration,
+          startedAt: new Date(),
+        },
+      }));
+      addServerLog('info', `Timer started: ${formatSecondsToTime(totalDuration)} for "${context.title}"`);
+      return;
+    }
+
+    if (descriptor.adjustment.kind === 'clear') {
+      let removedCount = 0;
+      setActiveTimers(prev => {
+        removedCount = Object.keys(prev).length;
+        return {};
+      });
+
+      if (removedCount === 0) {
+        addServerLog('info', 'No active timers to clear');
+      } else {
+        addServerLog('success', `Cleared ${removedCount} active timer${removedCount === 1 ? '' : 's'}`);
+      }
+      return;
+    }
+
+    const adjustmentSeconds = descriptor.adjustment.seconds;
+    if (adjustmentSeconds <= 0) {
+      return;
+    }
+
+    let summary: { adjusted: number; removed: number } = { adjusted: 0, removed: 0 };
+
+    setActiveTimers(prev => {
+      const updated: Record<string, ActiveTimerEntry> = {};
+
+      Object.entries(prev).forEach(([id, timer]) => {
+        const remaining = Math.max(timer.remainingTime - adjustmentSeconds, 0);
+        if (remaining === 0) {
+          summary.removed += 1;
+          return;
+        }
+        summary.adjusted += 1;
+        updated[id] = {
+          ...timer,
+          remainingTime: remaining,
+        };
+      });
+
+      return updated;
+    });
+
+    if (summary.adjusted === 0 && summary.removed === 0) {
+      addServerLog('info', 'No active timers to adjust');
+      return;
+    }
+
+    const parts: string[] = [];
+    if (summary.adjusted > 0) {
+      parts.push(`reduced ${summary.adjusted} timer${summary.adjusted === 1 ? '' : 's'}`);
+    }
+    if (summary.removed > 0) {
+      parts.push(`removed ${summary.removed} timer${summary.removed === 1 ? '' : 's'}`);
+    }
+    addServerLog(
+      'success',
+      `Adjusted timers (${formatSecondsToTime(adjustmentSeconds)}): ${parts.join(', ')}`,
+    );
+  };
+
+  const normalizeTimerBehavior = (rawConfig: any): TimerBehavior => {
+    const behavior = rawConfig?.timerBehavior;
+    if (behavior && typeof behavior === 'object') {
+      if (behavior.mode === 'start') {
+        const duration = typeof behavior.duration === 'string' ? behavior.duration : rawConfig?.timerDuration;
+        return { mode: 'start', duration: duration || '00:30' };
+      }
+
+      if (behavior.mode === 'adjust') {
+        if (behavior.adjustment === 'clear') {
+          return { mode: 'adjust', adjustment: 'clear' };
+        }
+
+        if (behavior.adjustment === 'subtract') {
+          const amount = typeof behavior.amount === 'string' ? behavior.amount : rawConfig?.timerDuration;
+          return { mode: 'adjust', adjustment: 'subtract', amount: amount || '00:30' };
+        }
+
+        if (behavior.adjustment && typeof behavior.adjustment === 'object') {
+          if (behavior.adjustment.type === 'clear') {
+            return { mode: 'adjust', adjustment: 'clear' };
+          }
+          if (behavior.adjustment.type === 'subtract') {
+            const amount = typeof behavior.adjustment.amount === 'string'
+              ? behavior.adjustment.amount
+              : behavior.amount;
+            return { mode: 'adjust', adjustment: 'subtract', amount: amount || '00:30' };
+          }
+        }
+      }
+    }
+
+    if (rawConfig?.timerEnabled) {
+      const duration = typeof rawConfig.timerDuration === 'string' ? rawConfig.timerDuration : '00:30';
+      return { mode: 'start', duration };
+    }
+
+    return { mode: 'none' };
+  };
+
+  const normalizeRedemptionConfig = (raw: any): RedemptionConfig | null => {
+    if (!raw || typeof raw !== 'object') {
+      return null;
+    }
+
+    const timerBehavior = normalizeTimerBehavior(raw);
+
+    return {
+      enabled: Boolean(raw.enabled),
+      ttsType: raw.ttsType === 'static' ? 'static' : 'dynamic',
+      dynamicTemplate:
+        typeof raw.dynamicTemplate === 'string' ? raw.dynamicTemplate : '[[USER]] said: [[MESSAGE]]',
+      staticFiles: [],
+      staticFileNames: Array.isArray(raw.staticFileNames) ? raw.staticFileNames : [],
+      timerBehavior,
+    };
+  };
 
   useEffect(() => {
     if (autoScroll && logsContainerRef.current) {
@@ -133,9 +386,9 @@ const ServerPage = () => {
     let serverInitialized = false;
 
     const initializeServer = async () => {
-      if (serverInitialized) return; 
+      if (serverInitialized) return;
       serverInitialized = true;
-      
+
       try {
         if (mounted && !isServerRunning) {
           await handleStartServer();
@@ -148,16 +401,16 @@ const ServerPage = () => {
         }
       }
     };
-    
+
     initializeServer();
 
     const unlistenStatus = listen('STATUS_UPDATE', (event) => {
       if (!mounted) return;
-      
+
       const message = event.payload as string;
       console.log('Server status:', message);
       addServerLog('info', message);
-      
+
       if (message.includes('Listening on')) {
         setIsServerRunning(true);
         setError(null);
@@ -176,7 +429,7 @@ const ServerPage = () => {
 
     const unlistenError = listen('ERROR', (event) => {
       if (!mounted) return;
-      
+
       const errorMessage = event.payload as string;
       console.error('Server error:', errorMessage);
       setError(errorMessage);
@@ -185,10 +438,10 @@ const ServerPage = () => {
 
     const unlistenTwitchRedemption = listen('TWITCH_CHANNEL_POINTS_REDEMPTION', async (event) => {
       if (!mounted) return;
-      
+
       const redemptionData = event.payload as any;
       console.log('Twitch redemption received:', redemptionData);
-      
+
       const redemptionRequest: RedemptionRequest = {
         id: redemptionData.id,
         user_name: redemptionData.user_name,
@@ -202,9 +455,9 @@ const ServerPage = () => {
 
       setRedemptionRequests(prev => [...prev, redemptionRequest]);
       addServerLog('info', `Redemption: ${redemptionData.user_name} redeemed "${redemptionData.reward_title}" (${redemptionData.reward_cost} points)`);
-      
+
       loadRedemptionConfig(redemptionData.reward_id);
-      
+
       if (redemptionData.user_input) {
         setEditingRedemptions(prev => ({
           ...prev,
@@ -215,7 +468,7 @@ const ServerPage = () => {
 
     const unlistenServerStopped = listen('SERVER_STOPPED', () => {
       if (!mounted) return;
-      
+
       console.log('Server stopped, redirecting to home page');
       setIsServerRunning(false);
       setIsEndingSession(false);
@@ -224,11 +477,11 @@ const ServerPage = () => {
 
     const unlistenSuccess = listen('SUCCESS', (event) => {
       if (!mounted) return;
-      
+
       const message = event.payload as string;
       console.log('Success event:', message);
       addServerLog('success', message);
-      
+
       if (message.includes('Secure encrypted channel established')) {
         setIsClientConnected(true);
         setPairingCode(null);
@@ -239,7 +492,7 @@ const ServerPage = () => {
     const unlistenClientConnected = listen('CLIENT_CONNECTED', () => {
       if (!mounted) return;
       setIsClientConnected(true);
-      setPairingCode(null); 
+      setPairingCode(null);
       addServerLog('success', 'Client connected (event)');
     });
 
@@ -271,7 +524,7 @@ const ServerPage = () => {
       if (mounted && isServerRunning) {
         checkConnectionStatus();
       }
-    }, 2000); 
+    }, 2000);
 
     const timerInterval = setInterval(() => {
       if (mounted) {
@@ -292,7 +545,7 @@ const ServerPage = () => {
           return hasChanges ? updated : prev;
         });
       }
-    }, 1000); 
+    }, 1000);
 
     return () => {
       mounted = false;
@@ -308,7 +561,7 @@ const ServerPage = () => {
       unlistenPeerDisconnect.then(f => f());
       unlistenPairingRequired.then(f => f());
     };
-  }, []); 
+  }, []);
 
   const getNetworkInfo = async () => {
     try {
@@ -316,7 +569,7 @@ const ServerPage = () => {
       setNetworkInfo({
         lan_ip: info,
         port: 12345,
-        is_running: true 
+        is_running: true
       });
       console.log('Network info retrieved:', info);
     } catch (error) {
@@ -334,19 +587,19 @@ const ServerPage = () => {
     try {
       setError(null);
       console.log('Starting server...');
-      setIsServerRunning(true); 
+      setIsServerRunning(true);
       await invoke('start_listener');
       addServerLog('success', 'Server started successfully');
     } catch (error) {
       console.error('Failed to start server:', error);
-      
+
       const errorStr = error as string;
       if (errorStr.includes('already in use') || errorStr.includes('Address already in use')) {
         console.log('Port already in use, server might already be running');
         setIsServerRunning(true);
         addServerLog('info', 'Server was already running on port 12345');
       } else {
-        setIsServerRunning(false); 
+        setIsServerRunning(false);
         setError(`Failed to start server: ${error}`);
         addServerLog('error', `Failed to start server: ${error}`);
       }
@@ -355,31 +608,35 @@ const ServerPage = () => {
 
   const handleAcceptRedemption = async (redemption: RedemptionRequest) => {
     setProcessingRedemptions(prev => new Set(prev).add(redemption.id));
-    
+
     try {
       const { load } = await import('@tauri-apps/plugin-store');
       const store = await load('redemptions.json', { autoSave: false, defaults: {} });
-      const configs = await store.get('redemptionConfigs') as Record<string, any>;
-      const redemptionConfig = configs?.[redemption.reward_id];
+      const configs = (await store.get('redemptionConfigs')) as Record<string, any> | undefined;
+      const normalizedConfig = normalizeRedemptionConfig(configs?.[redemption.reward_id]);
 
-      if (!redemptionConfig || !redemptionConfig.enabled) {
+      if (!normalizedConfig || !normalizedConfig.enabled) {
         addServerLog('error', `No configuration found for redemption ${redemption.reward_title}`);
         return;
       }
 
-      const timerDuration = redemptionConfig.timerEnabled ? 
-        parseTimeToSeconds(redemptionConfig.timerDuration) : null;
+      setRedemptionConfigs(prev => ({
+        ...prev,
+        [redemption.reward_id]: normalizedConfig,
+      }));
 
-      if (redemptionConfig.ttsType === 'static') {
-        await handleStaticRedemption(redemption, redemptionConfig, timerDuration);
+      const timerDescriptor = timerBehaviorToDescriptor(normalizedConfig.timerBehavior);
+
+      if (normalizedConfig.ttsType === 'static') {
+        await handleStaticRedemption(redemption, normalizedConfig, timerDescriptor);
         setRedemptionRequests(prev => prev.filter(r => r.id !== redemption.id));
-      } else if (redemptionConfig.ttsType === 'dynamic') {
-        await handleDynamicRedemption(redemption, redemptionConfig, timerDuration);
+      } else if (normalizedConfig.ttsType === 'dynamic') {
+        await handleDynamicRedemption(redemption, normalizedConfig, timerDescriptor);
       } else {
-        addServerLog('error', `Unknown TTS type: ${redemptionConfig.ttsType}`);
+        addServerLog('error', `Unknown TTS type: ${normalizedConfig.ttsType}`);
         return;
       }
-      
+
     } catch (error) {
       console.error('Failed to process redemption:', error);
       addServerLog('error', `Failed to process redemption: ${error}`);
@@ -392,21 +649,33 @@ const ServerPage = () => {
     }
   };
 
-  const parseTimeToSeconds = (timeStr: string): number => {
-    const [minutes, seconds] = timeStr.split(':').map(Number);
-    return (minutes * 60) + seconds;
+  const parseTimeToSeconds = (timeStr?: string): number => {
+    if (!timeStr || typeof timeStr !== 'string') {
+      return 0;
+    }
+    const parts = timeStr.split(':');
+    if (parts.length !== 2) {
+      return 0;
+    }
+    const minutes = Number(parts[0]);
+    const seconds = Number(parts[1]);
+    if (Number.isNaN(minutes) || Number.isNaN(seconds)) {
+      return 0;
+    }
+    return Math.max(minutes, 0) * 60 + Math.max(seconds, 0);
   };
 
   const formatSecondsToTime = (totalSeconds: number): string => {
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
+    const safeSeconds = Math.max(totalSeconds, 0);
+    const minutes = Math.floor(safeSeconds / 60);
+    const seconds = safeSeconds % 60;
     return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
   };
 
   const handleStaticRedemption = async (
-    redemption: RedemptionRequest, 
-    config: any, 
-    timerDuration: number | null
+    redemption: RedemptionRequest,
+    config: RedemptionConfig,
+    timerAction: TimerActionDescriptor
   ) => {
     if (!config.staticFileNames || config.staticFileNames.length === 0) {
       addServerLog('error', `No static files configured for ${redemption.reward_title}`);
@@ -415,7 +684,7 @@ const ServerPage = () => {
 
     const randomIndex = Math.floor(Math.random() * config.staticFileNames.length);
     const selectedFile = config.staticFileNames[randomIndex];
-    
+
     const redemptionFolderName = redemption.reward_title.replace(/[^a-zA-Z0-9]/g, '_');
     const filePath = `static_audios/${redemptionFolderName}/${selectedFile}`;
 
@@ -423,49 +692,38 @@ const ServerPage = () => {
     const content = redemption.user_input || `${redemption.user_name} redeemed ${redemption.reward_title}`;
 
     try {
-      if (timerDuration) {
-        await invoke('send_redemption_with_timer', {
-          filePath,
-          title,
-          content,
-          time: timerDuration
-        });
-        addServerLog('success', `Sent static redemption with timer (${timerDuration}s): ${selectedFile}`);
-        
-        const timerId = `timer_${Date.now()}_${redemption.id}`;
-        setActiveTimers(prev => ({
-          ...prev,
-          [timerId]: {
-            id: timerId,
-            title,
-            content,
-            userName: redemption.user_name,
-            totalDuration: timerDuration,
-            remainingTime: timerDuration,
-            startedAt: new Date()
-          }
-        }));
-      } else {
-        await invoke('send_redemption_without_timer', {
-          filePath,
-          title,
-          content
-        });
-        addServerLog('success', `Sent static redemption: ${selectedFile}`);
-      }
+      await invoke('send_redemption', {
+        filePath,
+        title,
+        content,
+        timerAction: descriptorToPayload(timerAction),
+      });
+
+      const timerLabel = describeTimerAction(timerAction);
+      addServerLog(
+        'success',
+        `Sent static redemption${timerLabel ? ` with ${timerLabel}` : ''}: ${selectedFile}`,
+      );
+
+      applyTimerActionLocally(timerAction, {
+        baseId: redemption.id,
+        title,
+        content,
+        userName: redemption.user_name,
+      });
     } catch (error) {
       addServerLog('error', `Failed to send static redemption: ${error}`);
     }
   };
 
   const handleDynamicRedemption = async (
-    redemption: RedemptionRequest, 
-    config: any, 
-    timerDuration: number | null
+    redemption: RedemptionRequest,
+    config: RedemptionConfig,
+    timerAction: TimerActionDescriptor
   ) => {
     try {
       const userMessage = editingRedemptions[redemption.id] || redemption.user_input || '';
-      
+
       const message = config.dynamicTemplate
         .replace(/\[\[USER\]\]/g, redemption.user_name)
         .replace(/\[\[MESSAGE\]\]/g, userMessage);
@@ -512,7 +770,7 @@ const ServerPage = () => {
           filePath,
           title,
           content,
-          timerDuration: timerDuration || undefined
+          timerAction,
         }
       }));
 
@@ -532,42 +790,31 @@ const ServerPage = () => {
     filePath: string,
     title: string,
     content: string,
-    timerDuration: number | null,
+    timerAction: TimerActionDescriptor,
     removeFromGenerated: boolean = true
   ) => {
     try {
-      if (timerDuration) {
-        await invoke('send_redemption_with_timer', {
-          filePath,
+      await invoke('send_redemption', {
+        filePath,
+        title,
+        content,
+        timerAction: descriptorToPayload(timerAction),
+      });
+
+      const timerLabel = describeTimerAction(timerAction);
+      addServerLog(
+        'success',
+        `Sent dynamic TTS redemption${timerLabel ? ` with ${timerLabel}` : ''}: "${content}"`,
+      );
+
+      const redemption = redemptionRequests.find(r => r.id === redemptionId);
+      if (redemption) {
+        applyTimerActionLocally(timerAction, {
+          baseId: redemptionId,
           title,
           content,
-          time: timerDuration
+          userName: redemption.user_name,
         });
-        addServerLog('success', `Sent dynamic TTS redemption with timer (${timerDuration}s): "${content}"`);
-        
-        const redemption = redemptionRequests.find(r => r.id === redemptionId);
-        if (redemption) {
-          const timerId = `timer_${Date.now()}_${redemptionId}`;
-          setActiveTimers(prev => ({
-            ...prev,
-            [timerId]: {
-              id: timerId,
-              title,
-              content,
-              userName: redemption.user_name,
-              totalDuration: timerDuration,
-              remainingTime: timerDuration,
-              startedAt: new Date()
-            }
-          }));
-        }
-      } else {
-        await invoke('send_redemption_without_timer', {
-          filePath,
-          title,
-          content
-        });
-        addServerLog('success', `Sent dynamic TTS redemption: "${content}"`);
       }
 
       if (removeFromGenerated) {
@@ -696,14 +943,14 @@ const ServerPage = () => {
   };
 
   const getDisplayMessage = (redemption: RedemptionRequest) => {
-    return editingRedemptions[redemption.id] !== undefined 
-      ? editingRedemptions[redemption.id] 
+    return editingRedemptions[redemption.id] !== undefined
+      ? editingRedemptions[redemption.id]
       : redemption.user_input || '';
   };
 
   const isMessageEdited = (redemption: RedemptionRequest) => {
-    return editingRedemptions[redemption.id] !== undefined && 
-           editingRedemptions[redemption.id] !== redemption.user_input;
+    return editingRedemptions[redemption.id] !== undefined &&
+      editingRedemptions[redemption.id] !== redemption.user_input;
   };
 
   const isDynamicTTS = (redemption: RedemptionRequest) => {
@@ -715,13 +962,15 @@ const ServerPage = () => {
     try {
       const { load } = await import('@tauri-apps/plugin-store');
       const store = await load('redemptions.json', { autoSave: false, defaults: {} });
-      const configs = await store.get('redemptionConfigs') as Record<string, any>;
+      const configs = (await store.get('redemptionConfigs')) as Record<string, any> | undefined;
       const config = configs?.[rewardId];
-      
-      if (config) {
+
+      const normalized = normalizeRedemptionConfig(config);
+
+      if (normalized) {
         setRedemptionConfigs(prev => ({
           ...prev,
-          [rewardId]: config
+          [rewardId]: normalized,
         }));
       }
     } catch (error) {
@@ -784,7 +1033,7 @@ const ServerPage = () => {
               <span className="font-medium">Back to Home</span>
             </motion.div>
           </Link>
-          
+
           <div className="flex items-center">
             <div className={`w-3 h-3 rounded-full mr-3 ${isServerRunning ? 'bg-green-400' : 'bg-red-400'}`}></div>
             <h1 className="text-xl font-semibold text-white">Server Management</h1>
@@ -818,7 +1067,7 @@ const ServerPage = () => {
       {/* Main Content */}
       <div className="flex-1 pt-24 pb-8 px-8 overflow-auto">
         <div className="max-w-6xl mx-auto">
-          
+
           {/* Error Display */}
           {error && (
             <motion.div
@@ -855,11 +1104,11 @@ const ServerPage = () => {
                   Waiting for Confirmation
                 </div>
               </div>
-              
+
               <p className="text-gray-300 mb-4">
                 A client is trying to connect to your server. Share this pairing code with the client or confirm if this is expected:
               </p>
-              
+
               <div className="bg-black/40 border border-yellow-500/30 rounded-lg p-6 mb-4">
                 <div className="text-center">
                   <p className="text-sm text-gray-400 mb-2">Pairing Code</p>
@@ -868,7 +1117,7 @@ const ServerPage = () => {
                   </p>
                 </div>
               </div>
-              
+
               <div className="flex gap-3">
                 <motion.button
                   whileHover={{ scale: 1.02 }}
@@ -892,10 +1141,10 @@ const ServerPage = () => {
                   Dismiss
                 </motion.button>
               </div>
-              
+
               <div className="mt-4 p-3 bg-blue-900/20 border border-blue-500/30 rounded-lg">
                 <p className="text-xs text-blue-300">
-                  <strong>Security Note:</strong> Only confirm this pairing if you expect a client to connect. 
+                  <strong>Security Note:</strong> Only confirm this pairing if you expect a client to connect.
                   The pairing code ensures secure communication between server and client.
                 </p>
               </div>
@@ -925,12 +1174,11 @@ const ServerPage = () => {
                       </p>
                     </div>
                   </div>
-                  
-                  <div className={`px-3 py-1.5 rounded-full text-xs font-semibold ${
-                    isServerRunning 
-                      ? 'bg-green-500/20 text-green-400 border border-green-500/30' 
+
+                  <div className={`px-3 py-1.5 rounded-full text-xs font-semibold ${isServerRunning
+                      ? 'bg-green-500/20 text-green-400 border border-green-500/30'
                       : 'bg-red-500/20 text-red-400 border border-red-500/30'
-                  }`}>
+                    }`}>
                     {isServerRunning ? 'Active' : 'Inactive'}
                   </div>
                 </div>
@@ -966,11 +1214,10 @@ const ServerPage = () => {
                           whileHover={{ scale: 1.05 }}
                           whileTap={{ scale: 0.95 }}
                           onClick={copyConnectionInfo}
-                          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all duration-200 ${
-                            copied 
-                              ? 'bg-green-500/20 text-green-400 border border-green-500/30' 
+                          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all duration-200 ${copied
+                              ? 'bg-green-500/20 text-green-400 border border-green-500/30'
                               : 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 hover:bg-cyan-500/30'
-                          }`}
+                            }`}
                         >
                           {copied ? (
                             <>
@@ -1024,20 +1271,19 @@ const ServerPage = () => {
                     const progress = ((timer.totalDuration - timer.remainingTime) / timer.totalDuration) * 100;
                     const isUrgent = timer.remainingTime <= 10;
                     const isWarning = timer.remainingTime <= 30;
-                    
+
                     return (
                       <motion.div
                         key={timer.id}
                         initial={{ x: -10, opacity: 0 }}
                         animate={{ x: 0, opacity: 1 }}
                         exit={{ x: 10, opacity: 0 }}
-                        className={`bg-gray-700/50 border rounded-lg p-3 ${
-                          isUrgent 
-                            ? 'border-red-400/50' 
-                            : isWarning 
-                            ? 'border-orange-400/50' 
-                            : 'border-gray-600/50'
-                        }`}
+                        className={`bg-gray-700/50 border rounded-lg p-3 ${isUrgent
+                            ? 'border-red-400/50'
+                            : isWarning
+                              ? 'border-orange-400/50'
+                              : 'border-gray-600/50'
+                          }`}
                       >
                         {/* Header */}
                         <div className="flex items-center justify-between mb-2">
@@ -1064,33 +1310,31 @@ const ServerPage = () => {
 
                         {/* Content */}
                         <p className="text-xs text-gray-400 mb-2 truncate">{timer.title}</p>
-                        
+
                         {/* Timer */}
                         <div className="flex items-center justify-between mb-2">
-                          <span className={`text-lg font-mono font-bold ${
-                            isUrgent 
-                              ? 'text-red-400' 
-                              : isWarning 
-                              ? 'text-orange-400' 
-                              : 'text-green-400'
-                          }`}>
+                          <span className={`text-lg font-mono font-bold ${isUrgent
+                              ? 'text-red-400'
+                              : isWarning
+                                ? 'text-orange-400'
+                                : 'text-green-400'
+                            }`}>
                             {timeDisplay}
                           </span>
                           {isUrgent && (
                             <span className="text-xs text-red-400 font-medium animate-pulse">URGENT</span>
                           )}
                         </div>
-                        
+
                         {/* Progress Bar */}
                         <div className="w-full bg-gray-600/50 rounded-full h-2">
-                          <div 
-                            className={`h-2 rounded-full transition-all duration-1000 ${
-                              isUrgent 
-                                ? 'bg-red-400' 
-                                : isWarning 
-                                ? 'bg-orange-400' 
-                                : 'bg-green-400'
-                            }`}
+                          <div
+                            className={`h-2 rounded-full transition-all duration-1000 ${isUrgent
+                                ? 'bg-red-400'
+                                : isWarning
+                                  ? 'bg-orange-400'
+                                  : 'bg-green-400'
+                              }`}
                             style={{ width: `${100 - progress}%` }}
                           />
                         </div>
@@ -1099,150 +1343,10 @@ const ServerPage = () => {
                   })
                 )}
               </div>
-          </motion.div>
-        </div>
-
-        {/* Manual Server Message */}
-        <motion.div
-          initial={{ y: 20, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          transition={{ duration: 0.5, delay: 0.15 }}
-          className="bg-gray-800/40 border border-gray-700/40 rounded-2xl p-6 mb-8"
-        >
-          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between mb-6">
-            <div className="flex items-start gap-3">
-              <div className="p-3 rounded-xl bg-purple-500/20 border border-purple-500/30">
-                <MessageSquare className="w-5 h-5 text-purple-300" />
-              </div>
-              <div>
-                <h3 className="text-xl font-semibold text-white">Manual Server Message</h3>
-                <p className="text-sm text-gray-400">
-                  Convert any message into speech and deliver it instantly to the connected client.
-                </p>
-              </div>
-            </div>
-            <div className={`px-3 py-1 rounded-full text-xs font-semibold ${manualTtsStatusStyles.classes}`}>
-              {manualTtsStatusStyles.label}
-            </div>
+            </motion.div>
           </div>
 
-          {manualTtsError && (
-            <div className="mb-4 p-3 rounded-lg border border-red-500/30 bg-red-500/10 text-red-200 text-sm">
-              {manualTtsError}
-            </div>
-          )}
-
-          <div className="grid gap-6 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-            <div className="space-y-4">
-              <div>
-                <label className="block text-xs font-medium text-gray-300 mb-2">
-                  Display Title <span className="text-gray-500">(optional)</span>
-                </label>
-                <input
-                  value={manualTtsTitle}
-                  onChange={(event) => setManualTtsTitle(event.target.value)}
-                  placeholder="Server Message"
-                  className="w-full rounded-lg border border-gray-600/50 bg-black/30 px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-purple-500/40"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-300 mb-2">Message</label>
-                <textarea
-                  value={manualTtsText}
-                  onChange={(event) => setManualTtsText(event.target.value)}
-                  rows={4}
-                  maxLength={500}
-                  placeholder="Type the message you want to convert to speech…"
-                  className="w-full rounded-lg border border-gray-600/50 bg-black/30 px-3 py-3 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-purple-500/40 resize-none"
-                />
-                <div className="mt-2 text-xs text-gray-500 flex justify-between">
-                  <span>{manualTtsText.trim().length} / 500 characters</span>
-                  {manualTtsStatus === 'ready' && manualTtsResult && (
-                    <span className="text-green-300">Audio ready</span>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              {manualTtsResult && (
-                <div className="rounded-lg border border-green-500/30 bg-green-500/10 p-3 text-xs text-green-200">
-                  <div className="font-semibold text-sm text-green-100 mb-1">{manualTtsResult.title}</div>
-                  <p className="text-xs text-green-200/80 line-clamp-2">{manualTtsResult.content}</p>
-                  {!isClientConnected && (
-                    <p className="mt-2 text-xs text-yellow-200/80">
-                      Client not connected — connect a client to send the audio.
-                    </p>
-                  )}
-                </div>
-              )}
-
-              <div className="flex flex-col gap-2">
-                <motion.button
-                  whileHover={!isManualTtsProcessing ? { scale: 1.02 } : undefined}
-                  whileTap={!isManualTtsProcessing ? { scale: 0.98 } : undefined}
-                  onClick={handleGenerateManualTts}
-                  disabled={isManualTtsProcessing}
-                  className={`flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
-                    isManualTtsProcessing
-                      ? 'bg-purple-600/40 text-white/80 cursor-not-allowed'
-                      : 'bg-purple-600 hover:bg-purple-500 text-white'
-                  }`}
-                >
-                  {manualTtsStatus === 'generating' ? (
-                    <>
-                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      Generating…
-                    </>
-                  ) : (
-                    <>
-                      <MessageSquare className="w-4 h-4" />
-                      Generate TTS
-                    </>
-                  )}
-                </motion.button>
-
-                <motion.button
-                  whileHover={manualTtsStatus === 'ready' && isClientConnected ? { scale: 1.02 } : undefined}
-                  whileTap={manualTtsStatus === 'ready' && isClientConnected ? { scale: 0.98 } : undefined}
-                  onClick={handleSendManualTts}
-                  disabled={!manualTtsResult || manualTtsStatus === 'sending' || !isClientConnected}
-                  className={`flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
-                    !manualTtsResult || !isClientConnected
-                      ? 'bg-gray-600/40 text-gray-300 cursor-not-allowed'
-                      : manualTtsStatus === 'sending'
-                      ? 'bg-cyan-600/40 text-white'
-                      : 'bg-cyan-600 hover:bg-cyan-500 text-white'
-                  }`}
-                >
-                  {manualTtsStatus === 'sending' ? (
-                    <>
-                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      Sending…
-                    </>
-                  ) : (
-                    <>
-                      <ArrowDownCircle className="w-4 h-4" />
-                      Send to Client
-                    </>
-                  )}
-                </motion.button>
-
-                <motion.button
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
-                  onClick={resetManualTts}
-                  className="flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium border border-gray-600/50 text-gray-200 hover:bg-gray-700/40"
-                >
-                  <X className="w-4 h-4" />
-                  Clear
-                </motion.button>
-              </div>
-            </div>
-          </div>
-        </motion.div>
-
-        {/* Redemptions and Logs Row */}
+          {/* Redemptions and Logs Row */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
             {/* Redemptions List */}
             <motion.div
@@ -1309,22 +1413,16 @@ const ServerPage = () => {
                           )}
                           {redemptionConfigs[redemption.reward_id] && (
                             <div className="flex items-center gap-2 mb-2">
-                              <div className={`px-2 py-1 rounded text-xs font-medium ${
-                                redemptionConfigs[redemption.reward_id].ttsType === 'dynamic' 
-                                  ? 'bg-blue-500/20 text-blue-400' 
+                              <div className={`px-2 py-1 rounded text-xs font-medium ${redemptionConfigs[redemption.reward_id].ttsType === 'dynamic'
+                                  ? 'bg-blue-500/20 text-blue-400'
                                   : 'bg-purple-500/20 text-purple-400'
-                              }`}>
+                                }`}>
                                 {redemptionConfigs[redemption.reward_id].ttsType === 'dynamic' ? 'Dynamic TTS' : 'Static Audio'}
                               </div>
-                              {redemptionConfigs[redemption.reward_id].timerEnabled && (
-                                <div className="flex items-center gap-1 px-2 py-1 bg-orange-500/20 text-orange-400 rounded text-xs">
-                                  <Clock className="w-3 h-3" />
-                                  {redemptionConfigs[redemption.reward_id].timerDuration}
-                                </div>
-                              )}
+                              {renderTimerBehaviorBadge(redemptionConfigs[redemption.reward_id].timerBehavior)}
                             </div>
                           )}
-                          
+
                           {generatedTTS[redemption.id] && (
                             <div className="flex items-center gap-2 mb-2">
                               <div className="w-2 h-2 bg-blue-400 rounded-full"></div>
@@ -1344,24 +1442,29 @@ const ServerPage = () => {
                               const tts = generatedTTS[redemption.id];
                               if (tts && isClientConnected) {
                                 try {
-                                  await sendGeneratedTTS(redemption.id, tts.filePath, tts.title, tts.content, tts.timerDuration || null);
+                                  await sendGeneratedTTS(
+                                    redemption.id,
+                                    tts.filePath,
+                                    tts.title,
+                                    tts.content,
+                                    tts.timerAction,
+                                  );
                                   setRedemptionRequests(prev => prev.filter(r => r.id !== redemption.id));
                                 } catch (error) {
                                 }
                               }
                             }}
                             disabled={!isClientConnected}
-                            className={`flex items-center gap-2 px-3 py-2 rounded-lg font-medium transition-colors ${
-                              isClientConnected 
-                                ? 'bg-blue-500 hover:bg-blue-600 text-white' 
+                            className={`flex items-center gap-2 px-3 py-2 rounded-lg font-medium transition-colors ${isClientConnected
+                                ? 'bg-blue-500 hover:bg-blue-600 text-white'
                                 : 'bg-gray-500 text-gray-300 cursor-not-allowed'
-                            }`}
+                              }`}
                           >
                             <Copy className="w-4 h-4" />
                             {isClientConnected ? 'Send to Client' : 'No Client Connected'}
                           </motion.button>
                         )}
-                        
+
                         {!generatedTTS[redemption.id] && (
                           <>
                             <motion.button
@@ -1446,11 +1549,10 @@ const ServerPage = () => {
                     whileHover={{ scale: 1.05 }}
                     whileTap={{ scale: 0.95 }}
                     onClick={() => setAutoScroll(!autoScroll)}
-                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-200 ${
-                      autoScroll 
-                        ? 'bg-green-500/20 text-green-400 border border-green-500/30' 
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-200 ${autoScroll
+                        ? 'bg-green-500/20 text-green-400 border border-green-500/30'
                         : 'bg-gray-500/20 text-gray-400 border border-gray-500/30 hover:bg-gray-500/30'
-                    }`}
+                      }`}
                     title={autoScroll ? 'Auto-scroll enabled' : 'Auto-scroll disabled'}
                   >
                     {autoScroll ? (
@@ -1467,7 +1569,7 @@ const ServerPage = () => {
                   </motion.button>
                 </div>
               </div>
-              <div 
+              <div
                 ref={logsContainerRef}
                 className="bg-black/40 rounded-lg p-4 font-mono text-sm text-gray-300 h-96 overflow-y-auto"
               >
@@ -1478,13 +1580,12 @@ const ServerPage = () => {
                     <div className="text-purple-400">[INFO] TTS system ready</div>
                     <div className="text-gray-300">[INFO] Ready to receive requests</div>
                     {serverLogs.map((log, index) => (
-                      <div 
+                      <div
                         key={index}
-                        className={`${
-                          log.type === 'error' ? 'text-red-400' :
-                          log.type === 'success' ? 'text-green-400' :
-                          'text-yellow-400'
-                        }`}
+                        className={`${log.type === 'error' ? 'text-red-400' :
+                            log.type === 'success' ? 'text-green-400' :
+                              'text-yellow-400'
+                          }`}
                       >
                         [{log.timestamp}] {log.message}
                       </div>
@@ -1493,6 +1594,144 @@ const ServerPage = () => {
                 ) : (
                   <div className="text-gray-500 italic">Server is offline. Start the server to see logs.</div>
                 )}
+              </div>
+            </motion.div>
+
+            {/* Manual Server Message */}
+            <motion.div
+              initial={{ y: 20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              transition={{ duration: 0.5, delay: 0.15 }}
+              className="bg-gray-800/40 border border-gray-700/40 rounded-2xl p-6 mb-8"
+            >
+              <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between mb-6">
+                <div className="flex items-start gap-3">
+                  <div className="p-3 rounded-xl bg-purple-500/20 border border-purple-500/30">
+                    <MessageSquare className="w-5 h-5 text-purple-300" />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-semibold text-white">Manual Server Message</h3>
+                    <p className="text-sm text-gray-400">
+                      Convert any message into speech and deliver it instantly to the connected client.
+                    </p>
+                  </div>
+                </div>
+                <div className={`px-3 py-1 rounded-full text-xs font-semibold ${manualTtsStatusStyles.classes}`}>
+                  {manualTtsStatusStyles.label}
+                </div>
+              </div>
+
+              {manualTtsError && (
+                <div className="mb-4 p-3 rounded-lg border border-red-500/30 bg-red-500/10 text-red-200 text-sm">
+                  {manualTtsError}
+                </div>
+              )}
+
+              <div className="grid gap-6 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-300 mb-2">
+                      Display Title <span className="text-gray-500">(optional)</span>
+                    </label>
+                    <input
+                      value={manualTtsTitle}
+                      onChange={(event) => setManualTtsTitle(event.target.value)}
+                      placeholder="Server Message"
+                      className="w-full rounded-lg border border-gray-600/50 bg-black/30 px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-purple-500/40"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-300 mb-2">Message</label>
+                    <textarea
+                      value={manualTtsText}
+                      onChange={(event) => setManualTtsText(event.target.value)}
+                      rows={4}
+                      maxLength={500}
+                      placeholder="Type the message you want to convert to speech…"
+                      className="w-full rounded-lg border border-gray-600/50 bg-black/30 px-3 py-3 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-purple-500/40 resize-none"
+                    />
+                    <div className="mt-2 text-xs text-gray-500 flex justify-between">
+                      <span>{manualTtsText.trim().length} / 500 characters</span>
+                      {manualTtsStatus === 'ready' && manualTtsResult && (
+                        <span className="text-green-300">Audio ready</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  {manualTtsResult && (
+                    <div className="rounded-lg border border-green-500/30 bg-green-500/10 p-3 text-xs text-green-200">
+                      <div className="font-semibold text-sm text-green-100 mb-1">{manualTtsResult.title}</div>
+                      <p className="text-xs text-green-200/80 line-clamp-2">{manualTtsResult.content}</p>
+                      {!isClientConnected && (
+                        <p className="mt-2 text-xs text-yellow-200/80">
+                          Client not connected — connect a client to send the audio.
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="flex flex-col gap-2">
+                    <motion.button
+                      whileHover={!isManualTtsProcessing ? { scale: 1.02 } : undefined}
+                      whileTap={!isManualTtsProcessing ? { scale: 0.98 } : undefined}
+                      onClick={handleGenerateManualTts}
+                      disabled={isManualTtsProcessing}
+                      className={`flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors ${isManualTtsProcessing
+                          ? 'bg-purple-600/40 text-white/80 cursor-not-allowed'
+                          : 'bg-purple-600 hover:bg-purple-500 text-white'
+                        }`}
+                    >
+                      {manualTtsStatus === 'generating' ? (
+                        <>
+                          <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          Generating…
+                        </>
+                      ) : (
+                        <>
+                          <MessageSquare className="w-4 h-4" />
+                          Generate TTS
+                        </>
+                      )}
+                    </motion.button>
+
+                    <motion.button
+                      whileHover={manualTtsStatus === 'ready' && isClientConnected ? { scale: 1.02 } : undefined}
+                      whileTap={manualTtsStatus === 'ready' && isClientConnected ? { scale: 0.98 } : undefined}
+                      onClick={handleSendManualTts}
+                      disabled={!manualTtsResult || manualTtsStatus === 'sending' || !isClientConnected}
+                      className={`flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors ${!manualTtsResult || !isClientConnected
+                          ? 'bg-gray-600/40 text-gray-300 cursor-not-allowed'
+                          : manualTtsStatus === 'sending'
+                            ? 'bg-cyan-600/40 text-white'
+                            : 'bg-cyan-600 hover:bg-cyan-500 text-white'
+                        }`}
+                    >
+                      {manualTtsStatus === 'sending' ? (
+                        <>
+                          <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          Sending…
+                        </>
+                      ) : (
+                        <>
+                          <ArrowDownCircle className="w-4 h-4" />
+                          Send to Client
+                        </>
+                      )}
+                    </motion.button>
+
+                    <motion.button
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      onClick={resetManualTts}
+                      className="flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium border border-gray-600/50 text-gray-200 hover:bg-gray-700/40"
+                    >
+                      <X className="w-4 h-4" />
+                      Clear
+                    </motion.button>
+                  </div>
+                </div>
               </div>
             </motion.div>
           </div>

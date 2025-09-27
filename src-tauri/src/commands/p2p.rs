@@ -1,13 +1,52 @@
 use crate::services::p2p::handle_connection;
-use crate::state::{AppStateWithChannel, ConnectionState, Message};
+use crate::state::{AppStateWithChannel, ConnectionState, Message, TimerAction, TimerAdjustment};
 use crate::{log_critical, log_debug, log_error, log_info, log_warn};
 use base64::{engine::general_purpose, Engine as _};
+use serde::Deserialize;
 use std::fs;
 use std::net::SocketAddr;
 use std::path::Path;
 use tauri::{AppHandle, Emitter, Manager, State, Window};
 use tokio::net::{lookup_host, TcpListener, TcpStream};
 use tokio::time::{timeout, Duration};
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TimerActionPayload {
+    None,
+    Start { duration_seconds: u32 },
+    Adjust { adjustment: TimerAdjustmentPayload },
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TimerAdjustmentPayload {
+    Subtract { seconds: u32 },
+    Clear,
+}
+
+impl TimerActionPayload {
+    fn into_timer_action(self) -> TimerAction {
+        match self {
+            TimerActionPayload::None => TimerAction::None,
+            TimerActionPayload::Start { duration_seconds } => {
+                TimerAction::Start { duration_seconds }
+            }
+            TimerActionPayload::Adjust { adjustment } => TimerAction::Adjust {
+                adjustment: adjustment.into_timer_adjustment(),
+            },
+        }
+    }
+}
+
+impl TimerAdjustmentPayload {
+    fn into_timer_adjustment(self) -> TimerAdjustment {
+        match self {
+            TimerAdjustmentPayload::Subtract { seconds } => TimerAdjustment::Subtract { seconds },
+            TimerAdjustmentPayload::Clear => TimerAdjustment::ClearAll,
+        }
+    }
+}
 
 #[tauri::command]
 pub async fn get_connection_status(state: State<'_, AppStateWithChannel>) -> Result<bool, String> {
@@ -193,60 +232,37 @@ pub async fn send_chat_message(
 }
 
 #[tauri::command]
-pub async fn send_redemption_without_timer(
+pub async fn send_redemption(
     file_path: String,
     title: String,
     content: String,
+    timer_action: Option<TimerActionPayload>,
     app: AppHandle,
     state: State<'_, AppStateWithChannel>,
 ) -> Result<(), String> {
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data directory: {}", e))?;
-
-    let full_path = app_data_dir.join(&file_path);
-
-    let audio_data = fs::read(&full_path)
-        .map_err(|e| format!("Failed to read audio file {}: {}", full_path.display(), e))?;
-
-    let message_tx = state.message_tx.lock().await;
-    if let Some(tx) = message_tx.as_ref() {
-        let redemption_msg = Message::RedemptionMessage {
-            audio: audio_data,
-            title,
-            content,
-            message_type: 0,
-            time: None,
-        };
-        let serialized = serde_json::to_string(&redemption_msg)
-            .map_err(|e| format!("Failed to serialize redemption message: {}", e))?;
-        tx.send(serialized)
-            .map_err(|e| format!("Failed to send redemption message: {}", e))?;
-        Ok(())
-    } else {
-        Err("No active connection".to_string())
+    if content.trim().is_empty() {
+        return Err("Content cannot be empty".into());
     }
-}
 
-#[tauri::command]
-pub async fn send_redemption_with_timer(
-    file_path: String,
-    title: String,
-    content: String,
-    time: u32,
-    app: AppHandle,
-    state: State<'_, AppStateWithChannel>,
-) -> Result<(), String> {
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data directory: {}", e))?;
+    let audio_path = {
+        let candidate = Path::new(&file_path);
+        if candidate.is_absolute() {
+            candidate.to_path_buf()
+        } else {
+            let app_data_dir = app
+                .path()
+                .app_data_dir()
+                .map_err(|e| format!("Failed to get app data directory: {}", e))?;
+            app_data_dir.join(candidate)
+        }
+    };
 
-    let full_path = app_data_dir.join(&file_path);
+    let audio_data = fs::read(&audio_path)
+        .map_err(|e| format!("Failed to read audio file {}: {}", audio_path.display(), e))?;
 
-    let audio_data = fs::read(&full_path)
-        .map_err(|e| format!("Failed to read audio file {}: {}", full_path.display(), e))?;
+    let timer_action = timer_action
+        .map(|payload| payload.into_timer_action())
+        .unwrap_or(TimerAction::None);
 
     let message_tx = state.message_tx.lock().await;
     if let Some(tx) = message_tx.as_ref() {
@@ -254,8 +270,7 @@ pub async fn send_redemption_with_timer(
             audio: audio_data,
             title,
             content,
-            message_type: 1,
-            time: Some(time),
+            timer_action,
         };
         let serialized = serde_json::to_string(&redemption_msg)
             .map_err(|e| format!("Failed to serialize redemption message: {}", e))?;

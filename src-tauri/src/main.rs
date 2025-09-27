@@ -12,6 +12,7 @@ mod state;
 
 use crate::services::pairing::AppState;
 use crate::state::*;
+use serde_json::{json, Value};
 use std::sync::Arc;
 use tauri::Emitter;
 use tauri::Manager;
@@ -112,6 +113,14 @@ fn main() {
                 }
             }
 
+            if let Err(migration_error) = run_startup_migrations(app) {
+                log_error!(
+                    "Application",
+                    "Startup migration encountered an error: {}",
+                    migration_error
+                );
+            }
+
             log_info!(
                 "Application",
                 "Tauri application setup completed successfully"
@@ -130,8 +139,7 @@ fn main() {
             commands::p2p::check_connection_health,
             commands::p2p::user_confirm_pairing,
             commands::p2p::send_chat_message,
-            commands::p2p::send_redemption_without_timer,
-            commands::p2p::send_redemption_with_timer,
+            commands::p2p::send_redemption,
             commands::p2p::send_server_message,
             commands::twitch::twitch_authenticate,
             commands::twitch::twitch_start_event_listener,
@@ -188,4 +196,84 @@ fn main() {
         "Application",
         "Vocalix v2 application terminated gracefully"
     );
+}
+
+fn run_startup_migrations(app: &tauri::App) -> Result<(), String> {
+    migrate_redemption_configs(app)?;
+    Ok(())
+}
+
+fn migrate_redemption_configs(app: &tauri::App) -> Result<(), String> {
+    let store = match app.store("redemptions.json") {
+        Ok(store) => store,
+        Err(err) => {
+            log_warn!(
+                "Startup",
+                "Redemption store not available during migration: {}",
+                err
+            );
+            return Ok(());
+        }
+    };
+
+    let Some(value) = store.get("redemptionConfigs") else {
+        return Ok(());
+    };
+
+    let Value::Object(mut configs) = value else {
+        log_warn!(
+            "Startup",
+            "Unexpected redemptionConfigs format; expected object"
+        );
+        return Ok(());
+    };
+
+    let mut changed = false;
+
+    for (_, config_value) in configs.iter_mut() {
+        let Value::Object(ref mut map) = config_value else {
+            continue;
+        };
+
+        let has_timer_behavior = map.contains_key("timerBehavior");
+        let timer_enabled = map
+            .get("timerEnabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let timer_duration = map
+            .get("timerDuration")
+            .and_then(Value::as_str)
+            .unwrap_or("00:30");
+
+        if !has_timer_behavior {
+            let behavior_value = if timer_enabled {
+                json!({
+                    "mode": "start",
+                    "duration": timer_duration,
+                })
+            } else {
+                json!({ "mode": "none" })
+            };
+            map.insert("timerBehavior".into(), behavior_value);
+            changed = true;
+        }
+
+        if map.remove("timerEnabled").is_some() {
+            changed = true;
+        }
+        if map.remove("timerDuration").is_some() {
+            changed = true;
+        }
+    }
+
+    if changed {
+        store.set("redemptionConfigs", Value::Object(configs));
+        store.save().map_err(|e| e.to_string())?;
+        log_info!(
+            "Startup",
+            "Migrated redemption configurations to timerBehavior schema"
+        );
+    }
+
+    Ok(())
 }

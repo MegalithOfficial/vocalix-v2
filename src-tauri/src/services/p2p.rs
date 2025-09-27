@@ -1,6 +1,8 @@
-use crate::state::{AppState, AppStateWithChannel, ConnectionState, Message, SessionKeys};
+use crate::state::{
+    AppState, AppStateWithChannel, ConnectionState, Message, SessionKeys, TimerAction,
+    TimerAdjustment,
+};
 use p256::ecdh::EphemeralSecret;
-use p256::ecdsa::SigningKey;
 use ring::aead;
 use std::sync::Arc;
 use tauri::{Emitter, Manager, Window};
@@ -584,11 +586,19 @@ pub async fn handle_connection(
                                     Message::Disconnect { .. } => {
                                         send_message(&mut stream, &parsed).await;
                                     }
-                                    Message::RedemptionMessage { audio, title, content, message_type, time } => {
+                                    Message::RedemptionMessage {
+                                        audio,
+                                        title,
+                                        content,
+                                        timer_action,
+                                    } => {
                                         send_redemption_message(
                                             &mut stream,
                                             &session_keys,
-                                            audio, title, content, message_type, time
+                                            audio,
+                                            title,
+                                            content,
+                                            timer_action,
                                         ).await;
                                     }
                                     Message::ServerMessage { audio, title, content } => {
@@ -689,14 +699,30 @@ async fn handle_decrypted(window: &Window, plaintext: String) {
                 audio,
                 title,
                 content,
-                message_type: _,
-                time,
+                timer_action,
             } => {
+                let timer_action_json = match timer_action {
+                    TimerAction::None => json!({ "type": "none" }),
+                    TimerAction::Start { duration_seconds } => {
+                        json!({ "type": "start", "duration_seconds": duration_seconds })
+                    }
+                    TimerAction::Adjust { adjustment } => match adjustment {
+                        TimerAdjustment::Subtract { seconds } => json!({
+                            "type": "adjust",
+                            "adjustment": { "type": "subtract", "seconds": seconds },
+                        }),
+                        TimerAdjustment::ClearAll => json!({
+                            "type": "adjust",
+                            "adjustment": { "type": "clear" },
+                        }),
+                    },
+                };
+
                 let payload = json!({
                     "id": format!("redemption_{}", Utc::now().timestamp_millis()),
                     "title": title,
                     "content": content,
-                    "timerDuration": time,
+                    "timerAction": timer_action_json,
                     "audioData": general_purpose::STANDARD.encode(&audio)
                 });
                 let _ = window.emit("REDEMPTION_RECEIVED", payload);
@@ -857,16 +883,14 @@ async fn send_redemption_message(
     audio: Vec<u8>,
     title: String,
     content: String,
-    message_type: u8,
-    time: Option<u32>,
+    timer_action: TimerAction,
 ) {
     if let Some(keys) = session_keys {
         let redemption_msg = Message::RedemptionMessage {
             audio,
             title,
             content,
-            message_type,
-            time,
+            timer_action,
         };
         match serde_json::to_string(&redemption_msg) {
             Ok(serialized) => match encrypt_message(keys, &serialized).await {

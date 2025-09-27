@@ -6,6 +6,8 @@ import {
   TwitchRedemption,
   RedemptionConfig,
   SerializableRedemptionConfig,
+  SerializableTimerBehavior,
+  TimerBehavior,
   RvcSettings,
   TwitchAuthStatus,
   StaticTtsResult
@@ -63,6 +65,57 @@ export const useSettingsState = (activeTab?: string) => {
 
   const twitchAuthCheckInFlight = useRef(false);
 
+  const defaultTimerBehavior: TimerBehavior = { mode: 'none' };
+
+  const toSerializableTimerBehavior = (behavior: TimerBehavior): SerializableTimerBehavior => {
+    switch (behavior.mode) {
+      case 'start':
+        return { mode: 'start', duration: behavior.duration || '00:30' };
+      case 'adjust':
+        if (behavior.adjustment === 'clear') {
+          return { mode: 'adjust', adjustment: 'clear' };
+        }
+        return {
+          mode: 'adjust',
+          adjustment: 'subtract',
+          amount: behavior.amount || '00:30',
+        };
+      default:
+        return { mode: 'none' };
+    }
+  };
+
+  const fromSerializableTimerBehavior = (config: SerializableRedemptionConfig): TimerBehavior => {
+    const behavior = config.timerBehavior;
+    if (behavior && typeof behavior === 'object') {
+      if (behavior.mode === 'start') {
+        return { mode: 'start', duration: behavior.duration || config.timerDuration || '00:30' };
+      }
+
+      if (behavior.mode === 'adjust') {
+        if (behavior.adjustment === 'clear') {
+          return { mode: 'adjust', adjustment: 'clear' };
+        }
+        if (behavior.adjustment === 'subtract') {
+          return {
+            mode: 'adjust',
+            adjustment: 'subtract',
+            amount: behavior.amount || config.timerDuration || '00:30',
+          };
+        }
+      }
+    }
+
+    if (config.timerEnabled) {
+      return {
+        mode: 'start',
+        duration: config.timerDuration || '00:30',
+      };
+    }
+
+    return defaultTimerBehavior;
+  };
+
   const checkTwitchAuthStatus = async () => {
     if (twitchAuthCheckInFlight.current) return;
     twitchAuthCheckInFlight.current = true;
@@ -114,8 +167,7 @@ export const useSettingsState = (activeTab?: string) => {
           dynamicTemplate: '[[USER]] said: [[MESSAGE]]',
           staticFiles: [],
           staticFileNames: [],
-          timerEnabled: false,
-          timerDuration: '00:30'
+          timerBehavior: defaultTimerBehavior,
         },
         ...redemptionConfigs[redemptionId],
         ...config
@@ -134,14 +186,17 @@ export const useSettingsState = (activeTab?: string) => {
       const serializableConfigs: Record<string, SerializableRedemptionConfig> = {};
       for (const [key, config] of Object.entries(configs)) {
         serializableConfigs[key] = {
-          ...config,
+          enabled: config.enabled,
+          ttsType: config.ttsType,
+          dynamicTemplate: config.dynamicTemplate,
           staticFiles: config.staticFiles.map(file => ({
             name: file.name,
             size: file.size,
             type: file.type,
             lastModified: file.lastModified
           })),
-          staticFileNames: config.staticFileNames || []
+          staticFileNames: config.staticFileNames || [],
+          timerBehavior: toSerializableTimerBehavior(config.timerBehavior),
         };
       }
 
@@ -173,9 +228,12 @@ export const useSettingsState = (activeTab?: string) => {
         } as File));
 
         redemptionConfigs[key] = {
-          ...config,
+          enabled: config.enabled,
+          ttsType: config.ttsType,
+          dynamicTemplate: config.dynamicTemplate,
           staticFiles: mockFiles,
-          staticFileNames: config.staticFileNames || []
+          staticFileNames: config.staticFileNames || [],
+          timerBehavior: fromSerializableTimerBehavior(config),
         };
       }
 

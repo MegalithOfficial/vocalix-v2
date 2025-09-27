@@ -153,8 +153,19 @@ export const ConnectingHero: React.FC<ConnectingHeroProps> = ({
    );
 };
 
+type TimerAdjustmentDescriptor =
+   | { kind: 'subtract'; seconds: number }
+   | { kind: 'clear' };
 
+type TimerActionDescriptor =
+   | { kind: 'none' }
+   | { kind: 'start'; durationSeconds: number }
+   | { kind: 'adjust'; adjustment: TimerAdjustmentDescriptor };
 
+type TimerActionPayload =
+   | { type: 'none' }
+   | { type: 'start'; duration_seconds: number }
+   | { type: 'adjust'; adjustment: { type: 'subtract'; seconds: number } | { type: 'clear' } };
 
 interface RedemptionData {
    id: string;
@@ -162,7 +173,7 @@ interface RedemptionData {
    content: string;
    audioData?: string;
    filePath: string;
-   timerDuration?: number;
+   timerAction: TimerActionDescriptor;
    receivedAt: Date;
    source?: 'twitch' | 'server';
 }
@@ -266,13 +277,144 @@ const ClientPage = () => {
       return () => clearInterval(timerInterval);
    }, []);
 
-   const formatSecondsToTime = (totalSeconds: number): string => {
-      const minutes = Math.floor(totalSeconds / 60);
-      const seconds = totalSeconds % 60;
-      return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-   };
+	const formatSecondsToTime = (totalSeconds: number): string => {
+		const minutes = Math.floor(totalSeconds / 60);
+		const seconds = totalSeconds % 60;
+		return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+	};
 
-   const playAudio = async (base64Data: string, mimeType: string = 'audio/mpeg') => {
+	const parseTimerActionPayload = (raw: any): TimerActionDescriptor => {
+		if (!raw || typeof raw !== 'object') {
+			return { kind: 'none' };
+		}
+
+		const payload = raw as TimerActionPayload;
+		if (payload.type === 'start') {
+			const seconds = Number(payload.duration_seconds);
+			if (Number.isFinite(seconds) && seconds > 0) {
+				return { kind: 'start', durationSeconds: Math.floor(seconds) };
+			}
+			return { kind: 'none' };
+		}
+
+		if (payload.type === 'adjust') {
+			const adjustment = payload.adjustment;
+			if (adjustment?.type === 'clear') {
+				return { kind: 'adjust', adjustment: { kind: 'clear' } };
+			}
+			if (adjustment?.type === 'subtract') {
+				const seconds = Number(adjustment.seconds);
+				if (Number.isFinite(seconds) && seconds > 0) {
+					return {
+						kind: 'adjust',
+						adjustment: { kind: 'subtract', seconds: Math.floor(seconds) },
+					};
+				}
+			}
+			return { kind: 'none' };
+		}
+
+		return { kind: 'none' };
+	};
+
+	const extractTimerAction = (data: any): TimerActionDescriptor => {
+		if (data && typeof data === 'object' && data.timerAction) {
+			return parseTimerActionPayload(data.timerAction);
+		}
+
+		const legacyValue = data?.timerDuration ?? data?.time;
+		const seconds = Number(legacyValue);
+		if (Number.isFinite(seconds) && seconds > 0) {
+			return { kind: 'start', durationSeconds: Math.floor(seconds) };
+		}
+
+		return { kind: 'none' };
+	};
+
+	const applyTimerAction = (
+		descriptor: TimerActionDescriptor,
+		context: { baseId: string; title: string; content: string; userName: string }
+	) => {
+		if (descriptor.kind === 'none') {
+			return;
+		}
+
+		if (descriptor.kind === 'start') {
+			const timerId = `timer_${Date.now()}_${context.baseId}`;
+			const totalDuration = descriptor.durationSeconds;
+			setActiveTimers(prev => ({
+				...prev,
+				[timerId]: {
+					id: timerId,
+					title: context.title,
+					content: context.content,
+					userName: context.userName,
+					totalDuration,
+					remainingTime: totalDuration,
+					startedAt: new Date(),
+				},
+			}));
+			addLog('info', `Timer started: ${formatSecondsToTime(totalDuration)} for "${context.title}"`);
+			return;
+		}
+
+		if (descriptor.adjustment.kind === 'clear') {
+			let removedCount = 0;
+			setActiveTimers(prev => {
+				removedCount = Object.keys(prev).length;
+				return {};
+			});
+
+			if (removedCount === 0) {
+				addLog('info', 'No active timers to clear');
+			} else {
+				addLog('success', `Cleared ${removedCount} active timer${removedCount === 1 ? '' : 's'}`);
+			}
+			return;
+		}
+
+		const adjustmentSeconds = descriptor.adjustment.seconds;
+		if (adjustmentSeconds <= 0) {
+			return;
+		}
+
+		let summary = { adjusted: 0, removed: 0 };
+
+		setActiveTimers(prev => {
+			const updated: Record<string, TimerData> = {};
+
+			Object.entries(prev).forEach(([id, timer]) => {
+				const remaining = Math.max(timer.remainingTime - adjustmentSeconds, 0);
+				if (remaining === 0) {
+					summary.removed += 1;
+					return;
+				}
+				summary.adjusted += 1;
+				updated[id] = {
+					...timer,
+					remainingTime: remaining,
+				};
+			});
+
+			return updated;
+		});
+
+		if (summary.adjusted === 0 && summary.removed === 0) {
+			addLog('info', 'No active timers to adjust');
+			return;
+		}
+
+		const parts: string[] = [];
+		if (summary.adjusted > 0) {
+			parts.push(`reduced ${summary.adjusted} timer${summary.adjusted === 1 ? '' : 's'}`);
+		}
+		if (summary.removed > 0) {
+			parts.push(`removed ${summary.removed} timer${summary.removed === 1 ? '' : 's'}`);
+		}
+		addLog('success', `Adjusted timers (-${formatSecondsToTime(adjustmentSeconds)}): ${parts.join(', ')}`);
+	};
+
+	const playAudio = async (base64Data: string, mimeType: string = 'audio/mpeg') => {
       try {
          if (currentAudio) {
             currentAudio.pause();
@@ -381,15 +523,20 @@ const ClientPage = () => {
          }
       }
 
+      const redemptionId = parsedData.id || `incoming_${Date.now()}`;
+      const userName =
+         parsedData.userName || parsedData.user_name || (source === 'server' ? 'Server' : 'Unknown');
+      const timerAction = extractTimerAction(parsedData);
+
       const redemption: RedemptionData = {
-         id: parsedData.id || `incoming_${Date.now()}`,
+         id: redemptionId,
          title:
             parsedData.title || (source === 'server' ? 'Server Message' : 'Unknown Redemption'),
          content: parsedData.content || parsedData.message || '',
          filePath: parsedData.filePath || parsedData.file_path || '',
          audioData:
             parsedData.audioData || parsedData.audio_base64 || parsedData.audioBase64 || '',
-         timerDuration: parsedData.timerDuration ?? parsedData.timer_duration ?? parsedData.time,
+         timerAction,
          receivedAt: new Date(),
          source,
       };
@@ -402,22 +549,12 @@ const ClientPage = () => {
             : `Redemption received: ${redemption.title}`
       );
 
-      if (redemption.timerDuration && redemption.timerDuration > 0) {
-         const timerId = `timer_${Date.now()}_${redemption.id}`;
-         setActiveTimers(prev => ({
-            ...prev,
-            [timerId]: {
-               id: timerId,
-               title: redemption.title,
-               content: redemption.content,
-               userName: parsedData.userName || (source === 'server' ? 'Server' : 'Unknown'),
-               totalDuration: redemption.timerDuration!,
-               remainingTime: redemption.timerDuration!,
-               startedAt: new Date(),
-            },
-         }));
-         addLog('info', `Timer started: ${redemption.timerDuration}s for "${redemption.title}"`);
-      }
+      applyTimerAction(timerAction, {
+         baseId: redemptionId,
+         title: redemption.title,
+         content: redemption.content,
+         userName,
+      });
 
       if (redemption.audioData && typeof redemption.audioData === 'string' && redemption.audioData.trim() !== '') {
          const clean = redemption.audioData.includes(',')
@@ -1272,11 +1409,21 @@ const ClientPage = () => {
                                        {latestRedemption.content}
                                     </p>
                                  )}
-                                 {latestRedemption.timerDuration && (
+                                 {latestRedemption.timerAction.kind === 'start' && (
                                     <div className="flex items-center justify-center gap-3 mb-4">
                                        <Clock className="w-6 h-6 text-orange-400" />
                                        <span className="text-2xl font-mono text-orange-400">
-                                          {formatSecondsToTime(latestRedemption.timerDuration)}
+                                          {formatSecondsToTime(latestRedemption.timerAction.durationSeconds)}
+                                       </span>
+                                    </div>
+                                 )}
+                                 {latestRedemption.timerAction.kind === 'adjust' && (
+                                    <div className="flex items-center justify-center gap-3 mb-4">
+                                       <Clock className="w-5 h-5 text-yellow-400" />
+                                       <span className="text-sm font-medium text-yellow-300">
+                                          {latestRedemption.timerAction.adjustment.kind === 'clear'
+                                             ? 'Clears all active timers'
+                                             : `Reduces timers by ${formatSecondsToTime(latestRedemption.timerAction.adjustment.seconds)}`}
                                        </span>
                                     </div>
                                  )}

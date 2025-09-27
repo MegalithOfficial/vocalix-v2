@@ -6,6 +6,7 @@ import { listen } from '@tauri-apps/api/event';
 import TwitchIntegration from '../TwitchIntegration';
 import { useSettingsState } from '../../hooks/useSettingsState';
 import { log } from '../../utils/logger';
+import { TimerBehavior } from '../../types/settings';
 
 interface TwitchSettingsTabProps {
   settingsState: ReturnType<typeof useSettingsState>;
@@ -264,21 +265,22 @@ const handleStop = () => {
     }
   };
 
-  const formatTimer = (value: string): string => {
-    const digits = value.replace(/\D/g, '');
+  const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 
-    if (digits.length <= 2) {
-      return `00:${digits.padStart(2, '0')}`;
-    } else if (digits.length <= 4) {
-      const minutes = digits.slice(0, -2);
-      const seconds = digits.slice(-2);
-      return `${minutes.padStart(2, '0')}:${seconds}`;
-    } else {
-      const minutes = digits.slice(0, 2);
-      const seconds = digits.slice(2, 4);
-      return `${minutes}:${seconds}`;
+  const parseDuration = (value?: string) => {
+    if (!value || !/^\d{2}:\d{2}$/.test(value)) {
+      return { minutes: 0, seconds: 0 };
     }
+    const [mm, ss] = value.split(':');
+    const minutes = clamp(parseInt(mm, 10) || 0, 0, 99);
+    const seconds = clamp(parseInt(ss, 10) || 0, 0, 59);
+    return { minutes, seconds };
   };
+
+  const toDurationString = (minutes: number, seconds: number) =>
+    `${clamp(minutes, 0, 99).toString().padStart(2, '0')}:${clamp(seconds, 0, 59)
+      .toString()
+      .padStart(2, '0')}`;
 
   return (
     <motion.div
@@ -349,6 +351,108 @@ const handleStop = () => {
                   if (!redemption) return null;
 
                   const isExpanded = expandedRedemptionId === redemption.id;
+                  const timerBehavior = config.timerBehavior || { mode: 'none' as const };
+                  const isNone = timerBehavior.mode === 'none';
+                  const isStart = timerBehavior.mode === 'start';
+                  const isAdjust = timerBehavior.mode === 'adjust';
+                  const isAdjustSubtract = isAdjust && timerBehavior.adjustment === 'subtract';
+                  const isAdjustClear = isAdjust && timerBehavior.adjustment === 'clear';
+
+                  const { minutes: startMinutes, seconds: startSeconds } = parseDuration(
+                    isStart ? timerBehavior.duration : '00:30'
+                  );
+                  const { minutes: adjustMinutes, seconds: adjustSeconds } = parseDuration(
+                    isAdjustSubtract ? timerBehavior.amount : '00:30'
+                  );
+
+                  const setTimerBehavior = (behavior: TimerBehavior) =>
+                    updateRedemptionConfig(redemption.id, { timerBehavior: behavior });
+
+                  const handleSelectMode = (mode: TimerBehavior['mode']) => {
+                    if (mode === 'none') {
+                      setTimerBehavior({ mode: 'none' });
+                      return;
+                    }
+
+                    if (mode === 'start') {
+                      const base = timerBehavior.mode === 'start'
+                        ? timerBehavior.duration
+                        : timerBehavior.mode === 'adjust' && timerBehavior.adjustment === 'subtract'
+                          ? timerBehavior.amount
+                          : undefined;
+                      setTimerBehavior({ mode: 'start', duration: base || '00:30' });
+                      return;
+                    }
+
+                    const base = timerBehavior.mode === 'adjust' && timerBehavior.adjustment === 'subtract'
+                      ? timerBehavior.amount
+                      : undefined;
+                    setTimerBehavior({
+                      mode: 'adjust',
+                      adjustment: 'subtract',
+                      amount: base || '00:30',
+                    });
+                  };
+
+                  const handleStartMinutesChange = (value: string) => {
+                    const next = clamp(parseInt(value, 10) || 0, 0, 99);
+                    setTimerBehavior({
+                      mode: 'start',
+                      duration: toDurationString(next, startSeconds),
+                    });
+                  };
+
+                  const handleStartSecondsChange = (value: string) => {
+                    const next = clamp(parseInt(value, 10) || 0, 0, 59);
+                    setTimerBehavior({
+                      mode: 'start',
+                      duration: toDurationString(startMinutes, next),
+                    });
+                  };
+
+                  const handleAdjustModeSelect = (adjustment: 'subtract' | 'clear') => {
+                    if (adjustment === 'clear') {
+                      setTimerBehavior({ mode: 'adjust', adjustment: 'clear' });
+                    } else {
+                      setTimerBehavior({
+                        mode: 'adjust',
+                        adjustment: 'subtract',
+                        amount: toDurationString(adjustMinutes, adjustSeconds),
+                      });
+                    }
+                  };
+
+                  const handleAdjustMinutesChange = (value: string) => {
+                    const next = clamp(parseInt(value, 10) || 0, 0, 99);
+                    setTimerBehavior({
+                      mode: 'adjust',
+                      adjustment: 'subtract',
+                      amount: toDurationString(next, adjustSeconds),
+                    });
+                  };
+
+                  const handleAdjustSecondsChange = (value: string) => {
+                    const next = clamp(parseInt(value, 10) || 0, 0, 59);
+                    setTimerBehavior({
+                      mode: 'adjust',
+                      adjustment: 'subtract',
+                      amount: toDurationString(adjustMinutes, next),
+                    });
+                  };
+
+                  const startPresets = [
+                    { label: '30s', minutes: 0, seconds: 30 },
+                    { label: '1m', minutes: 1, seconds: 0 },
+                    { label: '2m', minutes: 2, seconds: 0 },
+                    { label: '5m', minutes: 5, seconds: 0 },
+                  ];
+
+                  const adjustPresets = [
+                    { label: '-30s', minutes: 0, seconds: 30 },
+                    { label: '-1m', minutes: 1, seconds: 0 },
+                    { label: '-2m', minutes: 2, seconds: 0 },
+                    { label: '-5m', minutes: 5, seconds: 0 },
+                  ];
 
                   return (
                     <motion.div
@@ -519,41 +623,168 @@ const handleStop = () => {
 
                             {/* Timer Configuration */}
                             <div className="space-y-4">
-                              <div className="flex items-center justify-between">
-                                <div className="flex items-center space-x-2">
-                                  <Timer className="w-4 h-4 text-gray-400" />
-                                  <h5 className="text-sm font-semibold text-white">Timer</h5>
-                                  <span className="text-xs text-gray-500">(Optional)</span>
-                                </div>
-                                <motion.button
-                                  whileTap={{ scale: 0.95 }}
-                                  onClick={() => updateRedemptionConfig(redemption.id, { timerEnabled: !config.timerEnabled })}
-                                  className={`relative w-10 h-5 rounded-full transition-colors ${config.timerEnabled ? 'bg-purple-600' : 'bg-gray-600'
-                                    }`}
-                                >
-                                  <motion.div
-                                    animate={{ x: config.timerEnabled ? 20 : 0 }}
-                                    transition={{ type: "spring", stiffness: 500, damping: 30 }}
-                                    className="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full"
-                                  />
-                                </motion.button>
+                              <div className="flex items-center space-x-2">
+                                <Timer className="w-4 h-4 text-gray-400" />
+                                <h5 className="text-sm font-semibold text-white">Timer Behaviour</h5>
+                                <span className="text-xs text-gray-500">Optional</span>
                               </div>
 
-                              {config.timerEnabled && (
-                                <div className="flex items-center space-x-3 p-3 bg-gray-700/30 rounded-lg border border-gray-600/30">
-                                  <label className="text-sm font-medium text-gray-300 whitespace-nowrap">
-                                    Duration:
-                                  </label>
-                                  <div className="flex items-center space-x-2">
-                                    <input
-                                      type="text"
-                                      value={config.timerDuration}
-                                      onChange={(e) => updateRedemptionConfig(redemption.id, { timerDuration: formatTimer(e.target.value) })}
-                                      placeholder="00:30"
-                                      className="w-20 px-2 py-1 bg-gray-600/50 border border-gray-500/50 rounded text-white text-center font-mono text-sm focus:outline-none focus:border-purple-500 transition-colors"
-                                    />
-                                    <span className="text-xs text-gray-400">(MM:SS)</span>
+                              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                                <button
+                                  onClick={() => handleSelectMode('none')}
+                                  className={`p-3 rounded-lg border text-sm font-medium transition-colors ${isNone
+                                    ? 'border-purple-500 bg-purple-500/10 text-purple-200'
+                                    : 'border-gray-600/50 bg-gray-700/30 text-gray-300 hover:border-gray-500'
+                                    }`}
+                                >
+                                  No Timer
+                                </button>
+                                <button
+                                  onClick={() => handleSelectMode('start')}
+                                  className={`p-3 rounded-lg border text-sm font-medium transition-colors ${isStart
+                                    ? 'border-purple-500 bg-purple-500/10 text-purple-200'
+                                    : 'border-gray-600/50 bg-gray-700/30 text-gray-300 hover:border-gray-500'
+                                    }`}
+                                >
+                                  Start Timer
+                                </button>
+                                <button
+                                  onClick={() => handleSelectMode('adjust')}
+                                  className={`p-3 rounded-lg border text-sm font-medium transition-colors ${isAdjust
+                                    ? 'border-purple-500 bg-purple-500/10 text-purple-200'
+                                    : 'border-gray-600/50 bg-gray-700/30 text-gray-300 hover:border-gray-500'
+                                    }`}
+                                >
+                                  Adjust Active Timer
+                                </button>
+                              </div>
+
+                              {isStart && (
+                                <div className="space-y-3">
+                                  <div className="p-3 rounded-lg border border-purple-500/30 bg-purple-500/5">
+                                    <div className="text-xs uppercase text-purple-300 font-semibold mb-2">Start duration</div>
+                                    <div className="flex flex-wrap items-center gap-3">
+                                      <div className="flex items-center gap-2">
+                                        <div className="flex items-center gap-2 bg-gray-700/40 border border-gray-600/40 rounded-lg px-3 py-2">
+                                          <div className="flex flex-col text-xs text-gray-400">
+                                            <span>Minutes</span>
+                                            <input
+                                              type="number"
+                                              min={0}
+                                              max={99}
+                                              value={startMinutes}
+                                              onChange={(e) => handleStartMinutesChange(e.target.value)}
+                                              className="w-16 bg-transparent border border-gray-600/60 rounded-md text-white text-base font-semibold text-center focus:border-purple-400 focus:outline-none"
+                                            />
+                                          </div>
+                                          <span className="text-lg text-gray-500 font-semibold">:</span>
+                                          <div className="flex flex-col text-xs text-gray-400">
+                                            <span>Seconds</span>
+                                            <input
+                                              type="number"
+                                              min={0}
+                                              max={59}
+                                              value={startSeconds}
+                                              onChange={(e) => handleStartSecondsChange(e.target.value)}
+                                              className="w-16 bg-transparent border border-gray-600/60 rounded-md text-white text-base font-semibold text-center focus:border-purple-400 focus:outline-none"
+                                            />
+                                          </div>
+                                        </div>
+                                      </div>
+                                      <div className="flex flex-wrap gap-2">
+                                        {startPresets.map(preset => (
+                                          <button
+                                            key={preset.label}
+                                            onClick={() => setTimerBehavior({ mode: 'start', duration: toDurationString(preset.minutes, preset.seconds) })}
+                                            className="px-2.5 py-1.5 rounded-md text-xs font-medium bg-purple-500/10 text-purple-200 border border-purple-500/30 hover:bg-purple-500/20 transition-colors"
+                                          >
+                                            {preset.label}
+                                          </button>
+                                        ))}
+                                      </div>
+                                    </div>
                                   </div>
+                                  <p className="text-xs text-gray-500">The timer starts on the client as soon as this redemption finishes playing.</p>
+                                </div>
+                              )}
+
+                              {isAdjust && (
+                                <div className="space-y-3">
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                    <button
+                                      onClick={() => handleAdjustModeSelect('subtract')}
+                                      className={`p-3 rounded-lg border text-sm font-medium transition-colors ${isAdjustSubtract
+                                        ? 'border-purple-500 bg-purple-500/10 text-purple-200'
+                                        : 'border-gray-600/50 bg-gray-700/30 text-gray-300 hover:border-gray-500'
+                                        }`}
+                                    >
+                                      Subtract Time
+                                    </button>
+                                    <button
+                                      onClick={() => handleAdjustModeSelect('clear')}
+                                      className={`p-3 rounded-lg border text-sm font-medium transition-colors ${isAdjustClear
+                                        ? 'border-red-500 bg-red-500/10 text-red-200'
+                                        : 'border-gray-600/50 bg-gray-700/30 text-gray-300 hover:border-gray-500'
+                                        }`}
+                                    >
+                                      Clear All Timers
+                                    </button>
+                                  </div>
+
+                                  {isAdjustSubtract && (
+                                    <div className="space-y-3 p-3 rounded-lg border border-purple-500/30 bg-purple-500/5">
+                                      <div className="text-xs uppercase text-purple-300 font-semibold">Subtract amount</div>
+                                      <div className="flex flex-wrap items-center gap-3">
+                                        <div className="flex items-center gap-2 bg-gray-700/40 border border-gray-600/40 rounded-lg px-3 py-2">
+                                          <div className="flex flex-col text-xs text-gray-400">
+                                            <span>Minutes</span>
+                                            <input
+                                              type="number"
+                                              min={0}
+                                              max={99}
+                                              value={adjustMinutes}
+                                              onChange={(e) => handleAdjustMinutesChange(e.target.value)}
+                                              className="w-16 bg-transparent border border-gray-600/60 rounded-md text-white text-base font-semibold text-center focus:border-purple-400 focus:outline-none"
+                                            />
+                                          </div>
+                                          <span className="text-lg text-gray-500 font-semibold">:</span>
+                                          <div className="flex flex-col text-xs text-gray-400">
+                                            <span>Seconds</span>
+                                            <input
+                                              type="number"
+                                              min={0}
+                                              max={59}
+                                              value={adjustSeconds}
+                                              onChange={(e) => handleAdjustSecondsChange(e.target.value)}
+                                              className="w-16 bg-transparent border border-gray-600/60 rounded-md text-white text-base font-semibold text-center focus:border-purple-400 focus:outline-none"
+                                            />
+                                          </div>
+                                        </div>
+                                        <div className="flex flex-wrap gap-2">
+                                          {adjustPresets.map(preset => (
+                                            <button
+                                              key={preset.label}
+                                              onClick={() => setTimerBehavior({
+                                                mode: 'adjust',
+                                                adjustment: 'subtract',
+                                                amount: toDurationString(preset.minutes, preset.seconds),
+                                              })}
+                                              className="px-2.5 py-1.5 rounded-md text-xs font-medium bg-purple-500/10 text-purple-200 border border-purple-500/30 hover:bg-purple-500/20 transition-colors"
+                                            >
+                                              {preset.label}
+                                            </button>
+                                          ))}
+                                        </div>
+                                      </div>
+                                      <p className="text-xs text-gray-500">Removes the specified amount of time from every active timer. Timers that reach zero will end.</p>
+                                    </div>
+                                  )}
+
+                                  {isAdjustClear && (
+                                    <div className="p-3 rounded-lg border border-red-500/40 bg-red-500/10 text-xs text-red-200">
+                                      All active timers on the client will be cleared when this redemption fires.
+                                    </div>
+                                  )}
                                 </div>
                               )}
                             </div>

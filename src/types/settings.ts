@@ -15,14 +15,27 @@ export type StaticTtsResult = {
   relative_path: string;
 };
 
+export type TimerAdjustmentMode = 'subtract' | 'clear';
+
+export type TimerBehavior =
+  | { mode: 'none' }
+  | { mode: 'start'; duration: string } // MM:SS format
+  | { mode: 'adjust'; adjustment: 'subtract'; amount: string }
+  | { mode: 'adjust'; adjustment: 'clear' };
+
+export type SerializableTimerBehavior =
+  | { mode: 'none' }
+  | { mode: 'start'; duration: string }
+  | { mode: 'adjust'; adjustment: 'subtract'; amount: string }
+  | { mode: 'adjust'; adjustment: 'clear' };
+
 export interface RedemptionConfig {
   enabled: boolean;
   ttsType: 'dynamic' | 'static';
   dynamicTemplate: string;
   staticFiles: File[];
   staticFileNames: string[];
-  timerEnabled: boolean;
-  timerDuration: string; // MM:SS format
+  timerBehavior: TimerBehavior;
 }
 
 export interface SerializableRedemptionConfig {
@@ -36,8 +49,10 @@ export interface SerializableRedemptionConfig {
     lastModified: number;
   }>;
   staticFileNames: string[];
-  timerEnabled: boolean;
-  timerDuration: string;
+  timerBehavior?: SerializableTimerBehavior;
+  // Legacy fields kept for migration
+  timerEnabled?: boolean;
+  timerDuration?: string;
 }
 
 export interface RvcSettings {

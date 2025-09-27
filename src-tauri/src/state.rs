@@ -51,6 +51,19 @@ pub struct TwitchState {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+pub enum TimerAdjustment {
+    Subtract { seconds: u32 },
+    ClearAll,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub enum TimerAction {
+    None,
+    Start { duration_seconds: u32 },
+    Adjust { adjustment: TimerAdjustment },
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub enum Message {
     Hello(Vec<u8>),
     Challenge {
@@ -78,8 +91,7 @@ pub enum Message {
         audio: Vec<u8>,
         title: String,
         content: String,
-        message_type: u8,  // 0 = without timer, 1 = with timer
-        time: Option<u32>, // seconds
+        timer_action: TimerAction,
     },
 
     ServerMessage {
