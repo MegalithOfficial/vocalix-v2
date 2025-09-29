@@ -20,6 +20,23 @@ struct RedemptionConfig {
     timer_duration: Option<String>,
 }
 
+fn extract_enabled_flag(value: &Value) -> Option<bool> {
+    match value {
+        Value::Object(map) => map
+            .get("enabled")
+            .and_then(|enabled_value| match enabled_value {
+                Value::Bool(flag) => Some(*flag),
+                Value::Number(num) => Some(num.as_u64().unwrap_or(0) != 0),
+                Value::String(text) => {
+                    let normalized = text.trim().to_ascii_lowercase();
+                    Some(matches!(normalized.as_str(), "true" | "1" | "yes"))
+                }
+                _ => None,
+            }),
+        _ => None,
+    }
+}
+
 fn is_redemption_allowed(redemption_id: &str, window: &Window) -> bool {
     let app = window.app_handle();
 
@@ -28,22 +45,34 @@ fn is_redemption_allowed(redemption_id: &str, window: &Window) -> bool {
             if let Some(redemption_configs_value) = store.get("redemptionConfigs") {
                 if let Some(redemption_configs) = redemption_configs_value.as_object() {
                     if let Some(config_value) = redemption_configs.get(redemption_id) {
-                        if let Ok(config) =
-                            serde_json::from_value::<RedemptionConfig>(config_value.clone())
-                        {
-                            log_info!(
-                                "RedemptionFilter",
-                                "Redemption {} is configured and enabled: {}",
-                                redemption_id,
-                                config.enabled
-                            );
-                            return config.enabled;
-                        } else {
-                            log_warn!(
-                                "RedemptionFilter",
-                                "Failed to parse config for redemption {}",
-                                redemption_id
-                            );
+                        match serde_json::from_value::<RedemptionConfig>(config_value.clone()) {
+                            Ok(config) => {
+                                log_info!(
+                                    "RedemptionFilter",
+                                    "Redemption {} is configured and enabled: {}",
+                                    redemption_id,
+                                    config.enabled
+                                );
+                                return config.enabled;
+                            }
+                            Err(err) => {
+                                log_warn!(
+                                    "RedemptionFilter",
+                                    "Failed to parse config for redemption {}: {}",
+                                    redemption_id,
+                                    err
+                                );
+
+                                if let Some(enabled) = extract_enabled_flag(config_value) {
+                                    log_info!(
+                                        "RedemptionFilter",
+                                        "Falling back to raw enabled flag for {}: {}",
+                                        redemption_id,
+                                        enabled
+                                    );
+                                    return enabled;
+                                }
+                            }
                         }
                     } else {
                         log_info!(
