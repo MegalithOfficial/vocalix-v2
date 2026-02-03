@@ -80,6 +80,16 @@ pub async fn start_listener(
     window: Window,
     state: State<'_, AppStateWithChannel>,
 ) -> Result<(), String> {
+    {
+        let existing = state.listener_shutdown.lock().await;
+        if existing.is_some() {
+            window
+                .emit("STATUS_UPDATE", "Listener already running")
+                .ok();
+            return Ok(());
+        }
+    }
+
     log_info!("P2P", "Starting P2P listener on port 12345");
     window.emit("STATUS_UPDATE", "Starting listener...").ok();
 
@@ -96,6 +106,12 @@ pub async fn start_listener(
         .emit("STATUS_UPDATE", "Listening on 0.0.0.0:12345")
         .ok();
 
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+    {
+        let mut guard = state.listener_shutdown.lock().await;
+        *guard = Some(shutdown_tx);
+    }
+
     let win = window.clone();
     let app_state = state.inner.clone();
     let confirm_tx = state.confirmation_tx.clone();
@@ -103,37 +119,48 @@ pub async fn start_listener(
 
     tokio::spawn(async move {
         loop {
-            match listener.accept().await {
-                Ok((stream, addr)) => {
-                    log_info!("P2P", "Accepted connection from {}", addr);
-                    win.emit(
-                        "STATUS_UPDATE",
-                        format!("Accepted connection from {}", addr),
-                    )
-                    .ok();
-
-                    // Configure TCP settings to prevent idle disconnections
-                    if let Err(e) = stream.set_nodelay(true) {
-                        println!("Failed to set TCP_NODELAY on accepted connection: {}", e);
+            tokio::select! {
+                _ = shutdown_rx.changed() => {
+                    if *shutdown_rx.borrow() {
+                        log_info!("P2P", "Listener shutdown requested");
+                        win.emit("STATUS_UPDATE", "Listener stopped").ok();
+                        break;
                     }
-
-                    let confirmation_rx = confirm_tx.subscribe();
-
-                    tokio::spawn(handle_connection(
-                        stream,
-                        win.clone(),
-                        app_state.clone(),
-                        confirmation_rx,
-                        msg_tx.clone(),
-                        false, // LISTENER
-                    ));
-
-                    log_debug!("P2P", "Connection handler spawned for incoming connection");
                 }
-                Err(e) => {
-                    log_error!("P2P", "Failed to accept connection: {}", e);
-                    win.emit("ERROR", format!("Accept failed: {}", e)).ok();
-                    tokio::time::sleep(Duration::from_millis(300)).await;
+                result = listener.accept() => {
+                    match result {
+                        Ok((stream, addr)) => {
+                            log_info!("P2P", "Accepted connection from {}", addr);
+                            win.emit(
+                                "STATUS_UPDATE",
+                                format!("Accepted connection from {}", addr),
+                            )
+                            .ok();
+
+                            // Configure TCP settings to prevent idle disconnections
+                            if let Err(e) = stream.set_nodelay(true) {
+                                println!("Failed to set TCP_NODELAY on accepted connection: {}", e);
+                            }
+
+                            let confirmation_rx = confirm_tx.subscribe();
+
+                            tokio::spawn(handle_connection(
+                                stream,
+                                win.clone(),
+                                app_state.clone(),
+                                confirmation_rx,
+                                msg_tx.clone(),
+                                false, // LISTENER
+                            ));
+
+                            log_debug!("P2P", "Connection handler spawned for incoming connection");
+                        }
+                        Err(e) => {
+                            log_error!("P2P", "Failed to accept connection: {}", e);
+                            win.emit("ERROR", format!("Accept failed: {}", e)).ok();
+                            tokio::time::sleep(Duration::from_millis(300)).await;
+                        }
+                    }
                 }
             }
         }
@@ -350,6 +377,13 @@ pub async fn stop_listener(
     state: State<'_, AppStateWithChannel>,
 ) -> Result<(), String> {
     window.emit("STATUS_UPDATE", "Stopping server...").ok();
+
+    {
+        let mut shutdown_guard = state.listener_shutdown.lock().await;
+        if let Some(tx) = shutdown_guard.take() {
+            let _ = tx.send(true);
+        }
+    }
 
     let message_tx = state.message_tx.lock().await;
     if let Some(tx) = message_tx.as_ref() {

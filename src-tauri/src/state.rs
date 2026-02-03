@@ -4,7 +4,7 @@ use crate::services::twitch_oauth::TwitchAuthManager;
 use ring::aead;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::sync::{broadcast, mpsc, Mutex};
+use tokio::sync::{broadcast, mpsc, watch, Mutex};
 
 pub struct LoggingState {
     pub log_file_path: Arc<std::sync::Mutex<String>>,
@@ -42,6 +42,7 @@ pub struct AppStateWithChannel {
     pub confirmation_tx: broadcast::Sender<bool>,
     pub message_tx: Arc<Mutex<Option<mpsc::UnboundedSender<String>>>>,
     pub connection_state: Arc<Mutex<Option<ConnectionState>>>,
+    pub listener_shutdown: Arc<Mutex<Option<watch::Sender<bool>>>>,
 }
 
 #[derive(Default)]

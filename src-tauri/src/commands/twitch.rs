@@ -229,7 +229,9 @@ pub async fn twitch_start_event_listener(
 pub async fn twitch_stop_event_listener(
     twitch_state: State<'_, TwitchState>,
 ) -> Result<(), String> {
-    *twitch_state.event_sub.lock().await = None;
+    if let Some(event_sub) = twitch_state.event_sub.lock().await.take() {
+        event_sub.shutdown().await;
+    }
     Ok(())
 }
 

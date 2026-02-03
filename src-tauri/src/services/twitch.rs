@@ -6,7 +6,7 @@ use reqwest;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::sync::{mpsc, watch, Mutex, RwLock};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use tracing::instrument;
 use url::Url;
@@ -147,6 +147,7 @@ pub struct TwitchEventSub {
     connection_state: Arc<RwLock<EventSubConnectionState>>,
     event_sender: Arc<Mutex<Option<mpsc::UnboundedSender<EventSubEvent>>>>,
     reconnect_attempts: Arc<Mutex<usize>>,
+    shutdown_tx: Arc<watch::Sender<bool>>,
 }
 
 impl Clone for TwitchEventSub {
@@ -159,6 +160,7 @@ impl Clone for TwitchEventSub {
             connection_state: self.connection_state.clone(),
             event_sender: self.event_sender.clone(),
             reconnect_attempts: self.reconnect_attempts.clone(),
+            shutdown_tx: self.shutdown_tx.clone(),
         }
     }
 }
@@ -174,6 +176,7 @@ impl TwitchEventSub {
             connection_state: Arc::new(RwLock::new(EventSubConnectionState::Disconnected)),
             event_sender: Arc::new(Mutex::new(None)),
             reconnect_attempts: Arc::new(Mutex::new(0)),
+            shutdown_tx: Arc::new(watch::channel(false).0),
         }
     }
 
@@ -202,11 +205,22 @@ impl TwitchEventSub {
 
     #[instrument(skip(self))]
     pub async fn connect(&self) -> Result<()> {
+        let mut shutdown_rx = self.shutdown_tx.subscribe();
+        if *shutdown_rx.borrow() {
+            return Ok(());
+        }
+
         self.set_connection_state(EventSubConnectionState::Connecting)
             .await;
 
         let mut reconnect_url = None;
         loop {
+            if *shutdown_rx.borrow() {
+                self.set_connection_state(EventSubConnectionState::Disconnected)
+                    .await;
+                return Ok(());
+            }
+
             let attempts = *self.reconnect_attempts.lock().await;
             if attempts >= MAX_RECONNECT_ATTEMPTS {
                 log_critical!(
@@ -275,6 +289,11 @@ impl TwitchEventSub {
             url
         );
 
+        let mut shutdown_rx = self.shutdown_tx.subscribe();
+        if *shutdown_rx.borrow() {
+            return Ok(None);
+        }
+
         let parsed_url = Url::parse(&url).map_err(|e| {
             log_error!(
                 "TwitchEventSub",
@@ -315,6 +334,13 @@ impl TwitchEventSub {
 
         loop {
             tokio::select! {
+                _ = shutdown_rx.changed() => {
+                    if *shutdown_rx.borrow() {
+                        log_info!("TwitchEventSub", "Shutdown requested, closing WebSocket");
+                        let _ = write.send(Message::Close(None)).await;
+                        return Ok(None);
+                    }
+                }
                 message = read.next() => {
                     match message {
                         Some(Ok(Message::Text(text))) => {
@@ -382,6 +408,12 @@ impl TwitchEventSub {
                 }
             }
         }
+    }
+
+    pub async fn shutdown(&self) {
+        let _ = self.shutdown_tx.send(true);
+        self.set_connection_state(EventSubConnectionState::Disconnected)
+            .await;
     }
 
     pub async fn subscribe_to_channel_points(&self, user_id: &str) -> Result<()> {

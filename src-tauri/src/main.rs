@@ -40,6 +40,7 @@ fn main() {
         confirmation_tx: tx,
         message_tx: Arc::new(Mutex::new(None)),
         connection_state: Arc::new(Mutex::new(None)),
+        listener_shutdown: Arc::new(Mutex::new(None)),
     };
 
     let twitch_state = TwitchState::default();
