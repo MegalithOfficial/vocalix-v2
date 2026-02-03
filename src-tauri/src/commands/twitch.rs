@@ -6,6 +6,7 @@ use crate::{log_critical, log_debug, log_error, log_info, log_warn};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::{Emitter, State, Window};
+use tokio::time::{sleep, Duration};
 
 #[tauri::command]
 pub async fn twitch_authenticate(
@@ -182,42 +183,80 @@ pub async fn twitch_start_event_listener(
         }
     });
 
-    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    let event_sub_for_subscriptions = event_sub.clone();
+    let window_for_subscriptions = window.clone();
+    let auth_for_subscriptions = auth_manager.clone();
+    tokio::spawn(async move {
+        let user_id = match auth_for_subscriptions.validate_current_tokens().await {
+            Ok(validation) => validation.user_id,
+            Err(e) => {
+                window_for_subscriptions
+                    .emit("ERROR", format!("Failed to validate tokens: {}", e))
+                    .ok();
+                None
+            }
+        };
 
-    match auth_manager.validate_current_tokens().await {
-        Ok(validation) => {
-            if let Some(user_id) = validation.user_id {
-                if let Err(e) = event_sub.subscribe_to_channel_points(&user_id).await {
-                    window
-                        .emit(
-                            "ERROR",
-                            format!("Failed to subscribe to channel points: {}", e),
-                        )
-                        .unwrap();
-                } else {
-                    window
-                        .emit("STATUS_UPDATE", "Subscribed to channel point redemptions!")
-                        .unwrap();
+        let Some(user_id) = user_id else {
+            return;
+        };
+
+        let mut last_session_id: Option<String> = None;
+        let mut shutdown_rx = event_sub_for_subscriptions.shutdown_receiver();
+
+        loop {
+            tokio::select! {
+                _ = shutdown_rx.changed() => {
+                    if *shutdown_rx.borrow() {
+                        break;
+                    }
                 }
+                _ = sleep(Duration::from_secs(2)) => {
+                    if *shutdown_rx.borrow() {
+                        break;
+                    }
 
-                let common_subscriptions = create_common_subscriptions(&user_id);
-                if let Err(_e) = event_sub.subscribe_to_events(common_subscriptions).await {
-                    //window
-                    //    .emit("ERROR", format!("Failed to subscribe to events: {}", e))
-                    //    .unwrap();
-                } else {
-                    window
-                        .emit("STATUS_UPDATE", "Subscribed to Twitch events!")
-                        .unwrap();
+                    if let Some(session) = event_sub_for_subscriptions.get_session_info().await {
+                        if last_session_id.as_deref() != Some(&session.id) {
+                            let from_reconnect = event_sub_for_subscriptions
+                                .consume_reconnect_welcome_flag()
+                                .await;
+                            if from_reconnect {
+                                window_for_subscriptions
+                                    .emit("STATUS_UPDATE", "Reconnected to Twitch (subscriptions preserved)")
+                                    .ok();
+                                last_session_id = Some(session.id);
+                                continue;
+                            }
+
+                            if let Err(e) = event_sub_for_subscriptions.subscribe_to_channel_points(&user_id).await {
+                                window_for_subscriptions
+                                    .emit("ERROR", format!("Failed to subscribe to channel points: {}", e))
+                                    .ok();
+                            } else {
+                                window_for_subscriptions
+                                    .emit("STATUS_UPDATE", "Subscribed to channel point redemptions!")
+                                    .ok();
+                            }
+
+                            let common_subscriptions = create_common_subscriptions(&user_id);
+                            if let Err(e) = event_sub_for_subscriptions.subscribe_to_events(common_subscriptions).await {
+                                window_for_subscriptions
+                                    .emit("ERROR", format!("Failed to subscribe to events: {}", e))
+                                    .ok();
+                            } else {
+                                window_for_subscriptions
+                                    .emit("STATUS_UPDATE", "Subscribed to Twitch events!")
+                                    .ok();
+                            }
+
+                            last_session_id = Some(session.id);
+                        }
+                    }
                 }
             }
         }
-        Err(e) => {
-            window
-                .emit("ERROR", format!("Failed to validate tokens: {}", e))
-                .unwrap();
-        }
-    }
+    });
 
     window
         .emit("STATUS_UPDATE", "Event listener started successfully!")

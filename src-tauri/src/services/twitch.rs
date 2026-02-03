@@ -148,6 +148,7 @@ pub struct TwitchEventSub {
     event_sender: Arc<Mutex<Option<mpsc::UnboundedSender<EventSubEvent>>>>,
     reconnect_attempts: Arc<Mutex<usize>>,
     shutdown_tx: Arc<watch::Sender<bool>>,
+    last_welcome_from_reconnect: Arc<Mutex<bool>>,
 }
 
 impl Clone for TwitchEventSub {
@@ -161,6 +162,7 @@ impl Clone for TwitchEventSub {
             event_sender: self.event_sender.clone(),
             reconnect_attempts: self.reconnect_attempts.clone(),
             shutdown_tx: self.shutdown_tx.clone(),
+            last_welcome_from_reconnect: self.last_welcome_from_reconnect.clone(),
         }
     }
 }
@@ -177,6 +179,7 @@ impl TwitchEventSub {
             event_sender: Arc::new(Mutex::new(None)),
             reconnect_attempts: Arc::new(Mutex::new(0)),
             shutdown_tx: Arc::new(watch::channel(false).0),
+            last_welcome_from_reconnect: Arc::new(Mutex::new(false)),
         }
     }
 
@@ -213,7 +216,6 @@ impl TwitchEventSub {
         self.set_connection_state(EventSubConnectionState::Connecting)
             .await;
 
-        let mut reconnect_url = None;
         loop {
             if *shutdown_rx.borrow() {
                 self.set_connection_state(EventSubConnectionState::Disconnected)
@@ -236,19 +238,13 @@ impl TwitchEventSub {
                 ));
             }
 
-            let connection_result = self.connect_internal(reconnect_url.clone()).await;
+            let connection_result = self.connect_internal(None).await;
 
             match connection_result {
-                Ok(new_reconnect_url) => {
+                Ok(_new_reconnect_url) => {
                     *self.reconnect_attempts.lock().await = 0;
 
-                    if let Some(url) = new_reconnect_url {
-                        log_info!("TwitchEventSub", "Switching to reconnect URL: {}", url);
-                        reconnect_url = Some(url);
-                        continue;
-                    } else {
-                        break;
-                    }
+                    break;
                 }
                 Err(e) => {
                     *self.reconnect_attempts.lock().await += 1;
@@ -349,7 +345,80 @@ impl TwitchEventSub {
                             match self.handle_websocket_message(&text).await {
                                 Ok(Some(reconnect_url)) => {
                                     log_info!("TwitchEventSub", "Received reconnect message, switching to new URL");
-                                    return Ok(Some(reconnect_url));
+
+                                    if reconnect_url.is_empty() {
+                                        return Err(anyhow!("Invalid reconnect URL"));
+                                    }
+
+                                    let (new_stream, _) = connect_async(&reconnect_url)
+                                        .await
+                                        .map_err(|e| anyhow!("Failed to connect to reconnect URL: {}", e))?;
+                                    let (mut new_write, mut new_read) = new_stream.split();
+
+                                    let mut welcome_received = false;
+                                    let mut welcome_deadline = tokio::time::sleep(Duration::from_secs(30));
+                                    tokio::pin!(welcome_deadline);
+
+                                    loop {
+                                        tokio::select! {
+                                            _ = &mut welcome_deadline => {
+                                                return Err(anyhow!("Reconnect welcome timeout"));
+                                            }
+                                            msg = new_read.next() => {
+                                                match msg {
+                                                    Some(Ok(Message::Text(text))) => {
+                                                        let parsed: EventSubMessage = serde_json::from_str(&text)
+                                                            .map_err(|e| anyhow!("Failed to parse EventSub message: {}", e))?;
+                                                        let is_welcome = parsed.metadata.message_type == "session_welcome";
+
+                                                        if is_welcome {
+                                                            let mut flag = self.last_welcome_from_reconnect.lock().await;
+                                                            *flag = true;
+                                                        }
+
+                                                        match self.handle_websocket_message(&text).await {
+                                                            Ok(_) => {}
+                                                            Err(e) => {
+                                                                log_error!("TwitchEventSub", "Error handling reconnect message: {}", e);
+                                                                self.emit_event(EventSubEvent::Error(e.to_string())).await;
+                                                            }
+                                                        }
+
+                                                        if is_welcome {
+                                                            welcome_received = true;
+                                                            break;
+                                                        }
+                                                    }
+                                                    Some(Ok(Message::Ping(data))) => {
+                                                        if let Err(e) = new_write.send(Message::Pong(data)).await {
+                                                            return Err(anyhow!("Failed to respond to ping on reconnect: {}", e));
+                                                        }
+                                                    }
+                                                    Some(Ok(Message::Close(_))) => {
+                                                        return Err(anyhow!("Reconnect socket closed before welcome"));
+                                                    }
+                                                    Some(Err(e)) => {
+                                                        return Err(anyhow!("Reconnect socket error: {}", e));
+                                                    }
+                                                    None => {
+                                                        return Err(anyhow!("Reconnect socket ended before welcome"));
+                                                    }
+                                                    _ => {}
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    if !welcome_received {
+                                        return Err(anyhow!("Reconnect welcome not received"));
+                                    }
+
+                                    let _ = write.send(Message::Close(None)).await;
+
+                                    write = new_write;
+                                    read = new_read;
+                                    last_message_time = tokio::time::Instant::now();
+                                    continue;
                                 }
                                 Ok(None) => {
                                     if let Some(session) = self.session.read().await.as_ref() {
@@ -747,6 +816,17 @@ impl TwitchEventSub {
 
     pub async fn get_session_info(&self) -> Option<EventSubSession> {
         self.session.read().await.clone()
+    }
+
+    pub fn shutdown_receiver(&self) -> watch::Receiver<bool> {
+        self.shutdown_tx.subscribe()
+    }
+
+    pub async fn consume_reconnect_welcome_flag(&self) -> bool {
+        let mut flag = self.last_welcome_from_reconnect.lock().await;
+        let value = *flag;
+        *flag = false;
+        value
     }
 }
 
