@@ -181,6 +181,12 @@ pub async fn start_initiator(
         msg
     })?;
 
+    if addr.ip().is_loopback() {
+        let msg = "Loopback address (127.0.0.1) only works on the same machine. Use the server's LAN IP instead.".to_string();
+        window.emit("ERROR", &msg).ok();
+        return Err(msg);
+    }
+
     let mut resolved = lookup_host(addr).await.map_err(|e| e.to_string())?;
     if let Some(first) = resolved.next() {
         window
@@ -193,12 +199,12 @@ pub async fn start_initiator(
 
     let stream = match timeout(Duration::from_secs(10), TcpStream::connect(addr)).await {
         Err(_) => {
-            let msg = format!("Connect timeout to {}", addr);
+            let msg = format!("Connect timeout to {}. Check firewall, server running, and that both devices are on the same LAN.", addr);
             window.emit("ERROR", &msg).ok();
             return Err(msg);
         }
         Ok(Err(e)) => {
-            let msg = format!("Connect failed to {}: {}", addr, e);
+            let msg = format!("Connect failed to {}: {}. Check firewall, server running, and that the IP/port are correct.", addr, e);
             window.emit("ERROR", &msg).ok();
             return Err(msg);
         }
