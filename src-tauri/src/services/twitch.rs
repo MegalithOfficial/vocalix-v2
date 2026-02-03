@@ -208,7 +208,7 @@ impl TwitchEventSub {
 
     #[instrument(skip(self))]
     pub async fn connect(&self) -> Result<()> {
-        let mut shutdown_rx = self.shutdown_tx.subscribe();
+        let shutdown_rx = self.shutdown_tx.subscribe();
         if *shutdown_rx.borrow() {
             return Ok(());
         }
@@ -260,7 +260,6 @@ impl TwitchEventSub {
                             "TwitchEventSub",
                             "Invalid reconnect URL received, falling back to original EventSub URL"
                         );
-                        reconnect_url = None;
                     }
 
                     if !e.to_string().contains("Invalid reconnect URL") {
@@ -355,8 +354,7 @@ impl TwitchEventSub {
                                         .map_err(|e| anyhow!("Failed to connect to reconnect URL: {}", e))?;
                                     let (mut new_write, mut new_read) = new_stream.split();
 
-                                    let mut welcome_received = false;
-                                    let mut welcome_deadline = tokio::time::sleep(Duration::from_secs(30));
+                                    let welcome_deadline = tokio::time::sleep(Duration::from_secs(30));
                                     tokio::pin!(welcome_deadline);
 
                                     loop {
@@ -385,7 +383,6 @@ impl TwitchEventSub {
                                                         }
 
                                                         if is_welcome {
-                                                            welcome_received = true;
                                                             break;
                                                         }
                                                     }
@@ -407,10 +404,6 @@ impl TwitchEventSub {
                                                 }
                                             }
                                         }
-                                    }
-
-                                    if !welcome_received {
-                                        return Err(anyhow!("Reconnect welcome not received"));
                                     }
 
                                     let _ = write.send(Message::Close(None)).await;
@@ -621,7 +614,7 @@ impl TwitchEventSub {
     }
 
     async fn handle_close_code(&self, code: u16) {
-        let error_message = match code {
+        let reason = match code {
             CLOSE_CODE_INTERNAL_SERVER_ERROR => "Internal server error".to_string(),
             CLOSE_CODE_CLIENT_SENT_INBOUND_TRAFFIC => {
                 "Client sent inbound traffic (only pong messages allowed)".to_string()
@@ -639,7 +632,8 @@ impl TwitchEventSub {
             _ => format!("Unknown close code: {}", code),
         };
 
-        log_error!("TwitchEventSub", "WebSocket closed: {}", error_message);
+        let error_message = format!("WebSocket closed (code {}): {}", code, reason);
+        log_error!("TwitchEventSub", "{}", error_message);
         self.emit_event(EventSubEvent::Error(error_message)).await;
     }
 

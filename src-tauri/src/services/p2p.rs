@@ -5,6 +5,7 @@ use crate::state::{
 use p256::ecdh::EphemeralSecret;
 use ring::aead;
 use std::sync::Arc;
+use std::time::Instant;
 use tauri::{Emitter, Manager, Window};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -61,6 +62,9 @@ pub async fn handle_connection(
         }
     }
 
+    let mut pairing_deadline: Option<Instant> =
+        Some(Instant::now() + std::time::Duration::from_secs(120));
+
     let mut connection_state = ConnectionState::Authenticating;
     update_shared_connection_state(&window, Some(connection_state.clone())).await;
 
@@ -113,6 +117,8 @@ pub async fn handle_connection(
         None
     };
     let mut last_keepalive_ack = std::time::Instant::now();
+    let mut pairing_timeout_check = tokio::time::interval(std::time::Duration::from_secs(1));
+    pairing_timeout_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     log_and_emit(
         &window,
@@ -282,6 +288,9 @@ pub async fn handle_connection(
 
                                     connection_state = ConnectionState::WaitingForUserConfirmation;
                                     update_shared_connection_state(&window, Some(connection_state.clone())).await;
+                                    if pairing_deadline.is_none() {
+                                        pairing_deadline = Some(Instant::now() + std::time::Duration::from_secs(120));
+                                    }
                                 }
                             }
                             Err(e) => log_and_emit(&window, role, "INITIAL_DH_PARSE_ERROR", &format!("Invalid peer DH key: {}", e)).await,
@@ -298,6 +307,9 @@ pub async fn handle_connection(
 
                                 connection_state = ConnectionState::WaitingForUserConfirmation;
                                 update_shared_connection_state(&window, Some(connection_state.clone())).await;
+                                if pairing_deadline.is_none() {
+                                    pairing_deadline = Some(Instant::now() + std::time::Duration::from_secs(120));
+                                }
                             }
                             Err(e) => log_and_emit(&window, role, "RESP_DH_PARSE_ERROR", &format!("Invalid response DH key: {}", e)).await,
                         }
@@ -439,6 +451,7 @@ pub async fn handle_connection(
 
                                 connection_state = ConnectionState::Encrypted;
                                 update_shared_connection_state(&window, Some(connection_state.clone())).await;
+                                pairing_deadline = None;
 
                                 // Reset keep-alive timer when encrypted connection is established
                                 last_keepalive_ack = std::time::Instant::now();
@@ -571,6 +584,20 @@ pub async fn handle_connection(
                         log_and_emit(&window, role, "KEEPALIVE_TIMEOUT", "Keep-alive timeout - peer not responding").await;
                         window.emit("ERROR", "Connection lost - peer not responding to keep-alive").ok();
                         break;
+                    }
+                }
+            }
+
+            _ = pairing_timeout_check.tick() => {
+                if connection_state != ConnectionState::Encrypted {
+                    if let Some(deadline) = pairing_deadline {
+                        if Instant::now() >= deadline {
+                            log_and_emit(&window, role, "PAIRING_TIMEOUT", "Pairing timed out").await;
+                            window.emit("ERROR", "Pairing timed out. Please retry the connection.").ok();
+                            send_message(&mut stream, &Message::Disconnect { reason: "Pairing timed out".to_string() }).await;
+                            clear_shared_connection_state(&window).await;
+                            break;
+                        }
                     }
                 }
             }

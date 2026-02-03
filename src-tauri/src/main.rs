@@ -138,6 +138,7 @@ fn main() {
             commands::p2p::disconnect_client,
             commands::p2p::send_disconnect_notice,
             commands::p2p::check_connection_health,
+            commands::p2p::probe_connection,
             commands::p2p::user_confirm_pairing,
             commands::p2p::send_chat_message,
             commands::p2p::send_redemption,

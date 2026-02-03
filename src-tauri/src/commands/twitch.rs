@@ -229,11 +229,15 @@ pub async fn twitch_start_event_listener(
                                 continue;
                             }
 
+                            let mut channel_points_ok = false;
+                            let mut common_events_ok = false;
+
                             if let Err(e) = event_sub_for_subscriptions.subscribe_to_channel_points(&user_id).await {
                                 window_for_subscriptions
                                     .emit("ERROR", format!("Failed to subscribe to channel points: {}", e))
                                     .ok();
                             } else {
+                                channel_points_ok = true;
                                 window_for_subscriptions
                                     .emit("STATUS_UPDATE", "Subscribed to channel point redemptions!")
                                     .ok();
@@ -245,8 +249,16 @@ pub async fn twitch_start_event_listener(
                                     .emit("ERROR", format!("Failed to subscribe to events: {}", e))
                                     .ok();
                             } else {
+                                common_events_ok = true;
                                 window_for_subscriptions
                                     .emit("STATUS_UPDATE", "Subscribed to Twitch events!")
+                                    .ok();
+                            }
+
+                            if channel_points_ok && common_events_ok {
+                                window_for_subscriptions.emit("EVENTSUB_READY", ()).ok();
+                                window_for_subscriptions
+                                    .emit("STATUS_UPDATE", "EventSub ready")
                                     .ok();
                             }
 
@@ -269,6 +281,28 @@ pub async fn twitch_stop_event_listener(
     twitch_state: State<'_, TwitchState>,
 ) -> Result<(), String> {
     if let Some(event_sub) = twitch_state.event_sub.lock().await.take() {
+        if let Some(session) = event_sub.get_session_info().await {
+            match event_sub.get_subscriptions().await {
+                Ok(subscriptions) => {
+                    for sub in subscriptions {
+                        if sub.transport.session_id.as_deref() == Some(&session.id) {
+                            if let Err(e) = event_sub.delete_subscription(&sub.id).await {
+                                log_warn!(
+                                    "TwitchEventSub",
+                                    "Failed to delete subscription {}: {}",
+                                    sub.id,
+                                    e
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    log_warn!("TwitchEventSub", "Failed to list subscriptions: {}", e);
+                }
+            }
+        }
+
         event_sub.shutdown().await;
     }
     Ok(())

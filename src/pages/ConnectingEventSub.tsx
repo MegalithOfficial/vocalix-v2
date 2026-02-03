@@ -1,10 +1,17 @@
-import { motion } from 'framer-motion';
-import { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Wifi, CheckCircle, AlertCircle, Loader2, ArrowLeft, Twitch } from 'lucide-react';
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
-import { logger } from '../utils/logger';
+import { motion } from "framer-motion";
+import { useState, useEffect, useRef } from "react";
+import { useNavigate } from "react-router-dom";
+import {
+  Wifi,
+  CheckCircle,
+  AlertCircle,
+  Loader2,
+  ArrowLeft,
+  Twitch,
+} from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { logger } from "../utils/logger";
 
 const ConnectingEventSub = () => {
   const navigate = useNavigate();
@@ -13,9 +20,13 @@ const ConnectingEventSub = () => {
   const [userInfo, setUserInfo] = useState<any>(null);
 
   const steps = [
-    { id: 'connecting', label: 'Connecting to Twitch EventSub', icon: Wifi },
-    { id: 'subscribing', label: 'Setting up event subscriptions', icon: Twitch },
-    { id: 'ready', label: 'Ready to receive redemptions', icon: CheckCircle }
+    { id: "connecting", label: "Connecting to Twitch EventSub", icon: Wifi },
+    {
+      id: "subscribing",
+      label: "Setting up event subscriptions",
+      icon: Twitch,
+    },
+    { id: "ready", label: "Ready to receive redemptions", icon: CheckCircle },
   ];
 
   const listenersRef = useRef<Array<Promise<() => void>>>([]);
@@ -25,138 +36,167 @@ const ConnectingEventSub = () => {
     let mounted = true;
     let unlistenStatus: Promise<() => void> | undefined;
     let unlistenError: Promise<() => void> | undefined;
-    let unlistenEventSubConnected: Promise<() => void> | undefined;
+    let unlistenEventSubReady: Promise<() => void> | undefined;
 
     const handleError = async (errorMessage: string) => {
-      console.error('EventSub error occurred, disconnecting...', errorMessage);
-      logger.error('ConnectingEventSub', `Error occurred: ${errorMessage}, initiating disconnect...`);
-      
+      console.error("EventSub error occurred, disconnecting...", errorMessage);
+      logger.error(
+        "ConnectingEventSub",
+        `Error occurred: ${errorMessage}, initiating disconnect...`,
+      );
+
       if (mounted) {
         setError(errorMessage);
       }
 
       try {
-        await invoke('twitch_stop_event_listener');
-        logger.info('ConnectingEventSub', 'EventSub listener stopped due to error');
-        console.log('EventSub disconnected successfully after error');
+        await invoke("twitch_stop_event_listener");
+        logger.info(
+          "ConnectingEventSub",
+          "EventSub listener stopped due to error",
+        );
+        console.log("EventSub disconnected successfully after error");
       } catch (stopError) {
-        console.error('Failed to stop EventSub listener:', stopError);
-        logger.error('ConnectingEventSub', `Failed to stop EventSub listener: ${stopError}`);
+        console.error("Failed to stop EventSub listener:", stopError);
+        logger.error(
+          "ConnectingEventSub",
+          `Failed to stop EventSub listener: ${stopError}`,
+        );
       }
 
       try {
-        if (unlistenStatus) unlistenStatus.then(f => f());
-        if (unlistenError) unlistenError.then(f => f());
-        if (unlistenEventSubConnected) unlistenEventSubConnected.then(f => f());
-        logger.info('ConnectingEventSub', 'All event listeners cleaned up');
+        if (unlistenStatus) unlistenStatus.then((f) => f());
+        if (unlistenError) unlistenError.then((f) => f());
+        if (unlistenEventSubReady) unlistenEventSubReady.then((f) => f());
+        logger.info("ConnectingEventSub", "All event listeners cleaned up");
       } catch (cleanupError) {
-        console.error('Failed to cleanup listeners:', cleanupError);
-        logger.error('ConnectingEventSub', `Failed to cleanup listeners: ${cleanupError}`);
+        console.error("Failed to cleanup listeners:", cleanupError);
+        logger.error(
+          "ConnectingEventSub",
+          `Failed to cleanup listeners: ${cleanupError}`,
+        );
       }
     };
 
     const initializeEventSub = async () => {
       try {
-        const user = await invoke('twitch_get_user_info');
+        const user = await invoke("twitch_get_user_info");
         if (!mounted) return;
         setUserInfo(user);
 
         setCurrentStep(0);
         if (!mounted) return;
 
-        await invoke('twitch_start_event_listener');
+        await invoke("twitch_start_event_listener");
         if (!mounted) return;
-        
+
         setCurrentStep(1);
         if (!mounted) return;
-        
       } catch (error) {
-        console.error('EventSub initialization failed:', error);
+        console.error("EventSub initialization failed:", error);
         await handleError(error as string);
       }
     };
 
-    unlistenStatus = listen('STATUS_UPDATE', (event) => {
-      logger.info('ConnectingEventSub', `Status update: ${event.payload}`);
+    unlistenStatus = listen("STATUS_UPDATE", (event) => {
+      logger.info("ConnectingEventSub", `Status update: ${event.payload}`);
       const payload = event.payload as string;
-      
-      if (abortingRef.current) return; 
 
-      if (payload.includes('Connection state changed: Connected') || 
-          payload.includes('WebSocket session established') ||
-          payload.includes('EventSub connected') || 
-          payload.includes('Subscriptions created')) {
-        setCurrentStep(2); 
+      if (abortingRef.current) return;
+
+      if (
+        payload.includes("Connection state changed: Connected") ||
+        payload.includes("WebSocket session established") ||
+        payload.includes("EventSub connected") ||
+        payload.includes("Subscriptions created")
+      ) {
+        setCurrentStep(2);
         setTimeout(() => {
           if (mounted) {
-            navigate('/server');
+            navigate("/server");
           }
-        }, 1500); 
-      } else if (payload.includes('Connection state changed: Connecting')) {
-        setCurrentStep(1); 
+        }, 1500);
+      } else if (payload.includes("Connection state changed: Connecting")) {
+        setCurrentStep(1);
       }
     });
 
-    unlistenError = listen('ERROR', async (event) => {
+    unlistenError = listen("ERROR", async (event) => {
       const errorMessage = event.payload as string;
-      console.log('ERROR event received:', errorMessage);
-      logger.error('ConnectingEventSub', `ERROR event received: ${errorMessage}`);
+      console.log("ERROR event received:", errorMessage);
+      logger.error(
+        "ConnectingEventSub",
+        `ERROR event received: ${errorMessage}`,
+      );
       if (abortingRef.current) return;
       await handleError(errorMessage);
     });
 
-    unlistenEventSubConnected = listen('EVENTSUB_CONNECTED', () => {
-      logger.info('ConnectingEventSub', 'EventSub connection established');
+    unlistenEventSubReady = listen("EVENTSUB_READY", () => {
+      logger.info("ConnectingEventSub", "EventSub ready");
       if (abortingRef.current) return;
       if (mounted) {
         setCurrentStep(2);
         setTimeout(() => {
           if (mounted) {
-            navigate('/server');
+            navigate("/server");
           }
         }, 1500);
       }
     });
 
-  initializeEventSub();
+    initializeEventSub();
 
-  listenersRef.current = [unlistenStatus, unlistenError, unlistenEventSubConnected].filter(Boolean) as Promise<() => void>[];
+    listenersRef.current = [
+      unlistenStatus,
+      unlistenError,
+      unlistenEventSubReady,
+    ].filter(Boolean) as Promise<() => void>[];
 
     return () => {
       mounted = false;
-      listenersRef.current.forEach(p => p.then(f => f()).catch(() => {}));
+      listenersRef.current.forEach((p) => p.then((f) => f()).catch(() => {}));
       listenersRef.current = [];
     };
   }, [navigate]);
 
   const cleanupListenersEarly = () => {
-    listenersRef.current.forEach(p => p.then(f => f()).catch(() => {}));
+    listenersRef.current.forEach((p) => p.then((f) => f()).catch(() => {}));
     listenersRef.current = [];
   };
 
   const handleGoBack = async () => {
-    if (abortingRef.current) return; 
+    if (abortingRef.current) return;
     abortingRef.current = true;
     setError(null);
-    logger.info('ConnectingEventSub', 'User requested cancel/back; aborting EventSub setup');
+    logger.info(
+      "ConnectingEventSub",
+      "User requested cancel/back; aborting EventSub setup",
+    );
     cleanupListenersEarly();
     try {
-      await invoke('twitch_stop_event_listener');
-      logger.info('ConnectingEventSub', 'EventSub listener stopped on user cancel');
+      await invoke("twitch_stop_event_listener");
+      logger.info(
+        "ConnectingEventSub",
+        "EventSub listener stopped on user cancel",
+      );
     } catch (error) {
-      console.error('Failed to stop event listener:', error);
-      logger.error('ConnectingEventSub', `Failed stopping listener on cancel: ${error}`);
+      console.error("Failed to stop event listener:", error);
+      logger.error(
+        "ConnectingEventSub",
+        `Failed stopping listener on cancel: ${error}`,
+      );
     }
-    navigate('/');
+    navigate("/");
   };
 
   const handleRetry = async () => {
     setError(null);
     setCurrentStep(0);
     try {
-      await invoke('twitch_stop_event_listener');
+      await invoke("twitch_stop_event_listener");
     } catch (error) {
-      console.error('Failed to stop event listener:', error);
+      console.error("Failed to stop event listener:", error);
     }
     window.location.reload();
   };
@@ -178,9 +218,11 @@ const ConnectingEventSub = () => {
           >
             <Twitch className="w-10 h-10 text-white" />
           </motion.div>
-          
-          <h1 className="text-2xl font-bold text-white mb-2">Setting Up EventSub</h1>
-          
+
+          <h1 className="text-2xl font-bold text-white mb-2">
+            Setting Up EventSub
+          </h1>
+
           {userInfo && (
             <p className="text-gray-400 text-sm">
               Connecting as {userInfo.display_name || userInfo.login}
@@ -197,7 +239,9 @@ const ConnectingEventSub = () => {
           >
             <div className="flex items-center mb-4">
               <AlertCircle className="w-6 h-6 text-red-400 mr-3" />
-              <h3 className="text-lg font-semibold text-red-400">Connection Failed</h3>
+              <h3 className="text-lg font-semibold text-red-400">
+                Connection Failed
+              </h3>
             </div>
             <p className="text-red-300 text-sm mb-4">{error}</p>
             <div className="flex space-x-3">
@@ -233,30 +277,36 @@ const ConnectingEventSub = () => {
                   transition={{ delay: index * 0.1 }}
                   className={`flex items-center p-4 rounded-xl border transition-all duration-500 ${
                     isActive
-                      ? 'bg-purple-900/30 border-purple-500/50 shadow-lg shadow-purple-500/20'
+                      ? "bg-purple-900/30 border-purple-500/50 shadow-lg shadow-purple-500/20"
                       : isCompleted
-                      ? 'bg-green-900/30 border-green-500/50'
-                      : 'bg-gray-800/30 border-gray-700/30'
+                        ? "bg-green-900/30 border-green-500/50"
+                        : "bg-gray-800/30 border-gray-700/30"
                   }`}
                 >
-                  <div className={`w-10 h-10 rounded-lg flex items-center justify-center mr-4 transition-all duration-500 ${
-                    isActive
-                      ? 'bg-purple-500'
-                      : isCompleted
-                      ? 'bg-green-500'
-                      : 'bg-gray-700'
-                  }`}>
+                  <div
+                    className={`w-10 h-10 rounded-lg flex items-center justify-center mr-4 transition-all duration-500 ${
+                      isActive
+                        ? "bg-purple-500"
+                        : isCompleted
+                          ? "bg-green-500"
+                          : "bg-gray-700"
+                    }`}
+                  >
                     {isActive ? (
                       <Loader2 className="w-5 h-5 text-white animate-spin" />
                     ) : (
-                      <StepIcon className={`w-5 h-5 ${isCompleted ? 'text-white' : 'text-gray-400'}`} />
+                      <StepIcon
+                        className={`w-5 h-5 ${isCompleted ? "text-white" : "text-gray-400"}`}
+                      />
                     )}
                   </div>
-                  
+
                   <div className="flex-1">
-                    <p className={`font-medium transition-colors duration-500 ${
-                      isActive || isCompleted ? 'text-white' : 'text-gray-400'
-                    }`}>
+                    <p
+                      className={`font-medium transition-colors duration-500 ${
+                        isActive || isCompleted ? "text-white" : "text-gray-400"
+                      }`}
+                    >
                       {step.label}
                     </p>
                   </div>

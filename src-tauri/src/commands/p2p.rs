@@ -555,3 +555,24 @@ pub async fn check_connection_health(
         }
     }
 }
+
+#[tauri::command]
+pub async fn probe_connection(address: String, timeout_ms: Option<u64>) -> Result<String, String> {
+    let addr: SocketAddr = address
+        .parse()
+        .map_err(|e| format!("Invalid address (use IP:PORT): {} ({})", address, e))?;
+
+    let timeout_duration = Duration::from_millis(timeout_ms.unwrap_or(3000));
+
+    match timeout(timeout_duration, TcpStream::connect(addr)).await {
+        Ok(Ok(_)) => Ok("Connection successful".to_string()),
+        Ok(Err(e)) => Err(format!(
+            "Connect failed to {}: {}. Check firewall, server running, and IP/port.",
+            addr, e
+        )),
+        Err(_) => Err(format!(
+            "Connect timeout to {}. Check firewall, server running, and LAN connectivity.",
+            addr
+        )),
+    }
+}
